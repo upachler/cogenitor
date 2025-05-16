@@ -1,6 +1,7 @@
-use std::{collections::HashMap, env::var, io::BufReader, rc::Rc};
+use std::{borrow::Borrow, collections::HashMap, env::var, io::BufReader, ops::Deref, rc::Rc};
 
-use openapiv3::{AdditionalProperties, OpenAPI, ReferenceOr};
+use openapiv3::{AdditionalProperties, OpenAPI, ReferenceOr, Type};
+use serde_yaml::Number;
 
 use crate::types::{BooleanOrSchema, Schema};
 
@@ -9,10 +10,13 @@ pub struct OAS30Spec {
 }
 
 trait OAS3Resolver<T> {
-    fn resolve<'a>(&'a self, ro: &'a ReferenceOr<T>) -> Option<&'a T> {
+    fn resolve<'a, S>(&'a self, ro: &'a ReferenceOr<S>) -> Option<&'a T>
+    where
+        S: Borrow<T>,
+    {
         match ro {
             ReferenceOr::Reference { reference } => self.resolve_reference(reference),
-            ReferenceOr::Item(s) => Some(s),
+            ReferenceOr::Item(s) => Some(s.borrow()),
         }
     }
     fn resolve_reference(&self, reference: &str) -> Option<&T>;
@@ -34,6 +38,7 @@ impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
 #[derive(Clone)]
 enum RefSource {
     SchemaName(String),
+    SchemaProperty((Box<OAS30SchemaRef>, String)),
     AdditionalProperties(Box<OAS30SchemaRef>),
 }
 impl std::fmt::Debug for RefSource {
@@ -42,6 +47,9 @@ impl std::fmt::Debug for RefSource {
             RefSource::SchemaName(name) => f.write_fmt(format_args!("'{name}'")),
             RefSource::AdditionalProperties(oas30_schema_ref) => {
                 f.write_fmt(format_args!("{oas30_schema_ref:?}.additionalProperties"))
+            }
+            RefSource::SchemaProperty((oas30_schema_ref, name)) => {
+                f.write_fmt(format_args!("{oas30_schema_ref:?}.properties.{name}"))
             }
         }
     }
@@ -56,6 +64,17 @@ fn schema_from_additional_properties(
             Some(AdditionalProperties::Schema(o)) => Some(o.as_ref()),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+fn schema_from_property<'a, 'b>(
+    oas_schema: &'a openapiv3::Schema,
+    name: &str,
+) -> Option<&'a ReferenceOr<Box<openapiv3::Schema>>> {
+    use openapiv3::*;
+    match &oas_schema.schema_kind {
+        SchemaKind::Type(Type::Object(o)) => o.properties.get(name),
         _ => None,
     }
 }
@@ -84,6 +103,10 @@ impl OAS30SchemaRef {
                 let ro = schema_from_additional_properties(schema_ref.inner()).unwrap();
                 self.openapi.resolve(ro).unwrap()
             }
+            RefSource::SchemaProperty((schema_ref, name)) => {
+                let ro = schema_from_property(schema_ref.inner(), name).unwrap();
+                self.openapi.resolve(ro).unwrap()
+            }
         }
     }
 }
@@ -102,6 +125,14 @@ impl From<&openapiv3::Type> for crate::types::Type {
 }
 
 impl Schema for OAS30SchemaRef {
+    fn name(&self) -> Option<&str> {
+        match &self.ref_source {
+            RefSource::SchemaName(name) => Some(name),
+            RefSource::AdditionalProperties(_) => None,
+            RefSource::SchemaProperty(_) => None,
+        }
+    }
+
     fn type_(&self) -> Option<Vec<crate::types::Type>> {
         match &(self.inner().schema_kind) {
             openapiv3::SchemaKind::Type(t) => Some(vec![t.into()]),
@@ -110,7 +141,30 @@ impl Schema for OAS30SchemaRef {
     }
 
     fn format(&self) -> Option<crate::types::Format> {
-        todo!()
+        use openapiv3::*;
+        match &self.inner().schema_kind {
+            SchemaKind::Type(Type::Number(number_type)) => match number_type.format {
+                VariantOrUnknownOrEmpty::Item(NumberFormat::Double) => {
+                    Some(crate::types::Format::Double)
+                }
+                _ => None,
+            },
+            SchemaKind::Type(Type::String(string_type)) => match string_type.format {
+                VariantOrUnknownOrEmpty::Item(string_format) => {
+                    let fmt = match string_format {
+                        StringFormat::Date => crate::types::Format::Date,
+                        StringFormat::DateTime => crate::types::Format::DateTime,
+                        StringFormat::Password => crate::types::Format::Password,
+                        StringFormat::Byte => crate::types::Format::Byte,
+                        StringFormat::Binary => crate::types::Format::Binary,
+                    };
+                    Some(fmt)
+                }
+                VariantOrUnknownOrEmpty::Unknown(_) => todo!(),
+                VariantOrUnknownOrEmpty::Empty => todo!(),
+            },
+            _ => None,
+        }
     }
 
     fn title(&self) -> Option<&str> {
@@ -142,7 +196,22 @@ impl Schema for OAS30SchemaRef {
     }
 
     fn properties(&self) -> std::collections::HashMap<String, impl Schema> {
-        HashMap::<_, OAS30SchemaRef>::new()
+        use openapiv3::*;
+        let mut m = HashMap::new();
+        match &self.inner().schema_kind {
+            SchemaKind::Type(Type::Object(t)) => {
+                for (k, v) in t.properties.iter() {
+                    let ref_source = RefSource::SchemaProperty((Box::new(self.clone()), k.clone()));
+                    let type_ = OAS30SchemaRef {
+                        openapi: self.openapi.clone(),
+                        ref_source,
+                    };
+                    m.insert(k.to_string(), type_);
+                }
+            }
+            _ => (),
+        };
+        m
     }
 
     fn pattern_properties(&self) -> std::collections::HashMap<String, impl Schema> {

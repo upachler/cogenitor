@@ -55,6 +55,15 @@ See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
 pub trait Schema: Clone + std::fmt::Debug {
     /**
+    If this schema is named (i.e. a YAML/JSON key is associated with its definition),
+    this method returns that name.
+    Note that this will not return names of primitive types. However, if a primitive
+    type is referenced in the `type` schema property and that schema is named, the
+    name will be returned (so this represents a type alias)
+    */
+    fn name(&self) -> Option<&str>;
+
+    /**
      */
     fn type_(&self) -> Option<Vec<Type>>;
     /**

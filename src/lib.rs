@@ -1,6 +1,7 @@
+use anyhow::anyhow;
 use std::{collections::HashMap, io::Read, path::Path};
 
-use codemodel::{Codemodel, TypeRef};
+use codemodel::{Codemodel, Scope, TypeRef};
 use json::JsonValue;
 use types::{BooleanOrSchema, Schema, Spec};
 
@@ -41,6 +42,7 @@ fn populate_types(spec: &impl Spec, cm: &mut Codemodel) -> anyhow::Result<TypeMa
 }
 
 /** The rust type we're converting a JSON schema item into */
+#[derive(Debug)]
 enum TypeKind {
     Enum, // a rust enum generated from the strings in the 'enum' keyword
     Struct,
@@ -99,20 +101,66 @@ fn parse_schema(
     name: Option<String>,
     cm: &mut Codemodel,
 ) -> anyhow::Result<TypeRef> {
-    let kind = type_kind_of(schema);
-    /*
-        match kind {
-            TypeKind::String => {
-                let string_type = cm.type_string(&self);
-                if let Some(name) = name {
-                    return cm.build_type_alias(name, string_type)?;
+    let kind = type_kind_of(schema)?;
+
+    match &kind {
+        TypeKind::Struct => {
+            let mut b = cm.build_struct(name.as_ref().unwrap());
+            for (name, schema) in schema.properties() {
+                let type_ref = type_ref_of(cm, &schema)?;
+                b.field(&name, type_ref)?;
+            }
+            Ok(b.build()?)
+        }
+        /*TypeKind::String => {
+            let string_type = cm.type_string(&self);
+            if let Some(name) = name {
+                return cm.build_type_alias(name, string_type)?;
+            } else {
+                return string_type;
+            }
+        }*/
+        _ => {
+            unimplemented!("parsing {schema:?} for kind {kind:?}")
+        }
+    }
+}
+
+fn type_ref_of(cm: &mut Codemodel, schema: &impl Schema) -> anyhow::Result<TypeRef> {
+    match schema.name() {
+        Some(name) => Ok(cm.find_type(name).ok_or(anyhow!("type {name} not found"))?),
+        None => match &schema.type_() {
+            Some(types) => {
+                if types.len() != 1 {
+                    return Err(anyhow!(
+                        "encountered schema with a type property that has zero or multiple types. It is expected to have exactly one"
+                    ));
                 } else {
-                    return string_type;
+                    match types.get(0).unwrap() {
+                        types::Type::Null => todo!(),
+                        types::Type::Boolean => Ok(cm.type_bool()),
+                        types::Type::Object => todo!(),
+                        types::Type::Array => todo!(),
+                        types::Type::Number => match schema.format() {
+                            Some(format) => Ok(match format {
+                                types::Format::Int32 => cm.type_i32(),
+                                types::Format::Int64 => cm.type_i64(),
+                                types::Format::Float => cm.type_f32(),
+                                types::Format::Double => cm.type_f64(),
+                                _ => cm.type_f64(),
+                            }),
+                            None => Ok(cm.type_f64()),
+                        },
+                        types::Type::String => {
+                            // FIXME: we need to implement enums here!
+                            Ok(cm.type_string())
+                        }
+                    }
                 }
             }
-        }
-    */
-    unimplemented!("parsing {schema:?}")
+            None => todo!("produced type should refer to json::JSON"),
+        },
+    }
 }
 
 #[cfg(test)]
