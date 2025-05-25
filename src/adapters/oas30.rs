@@ -1,7 +1,7 @@
-use std::{borrow::Borrow, collections::HashMap, env::var, io::BufReader, ops::Deref, rc::Rc};
+use std::io::BufReader;
+use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
-use openapiv3::{AdditionalProperties, OpenAPI, ReferenceOr, Type};
-use serde_yaml::Number;
+use openapiv3::{OpenAPI, ReferenceOr};
 
 use crate::types::{BooleanOrSchema, Schema};
 
@@ -30,7 +30,7 @@ impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
             .unwrap()
             .schemas
             .get(reference)
-            .unwrap();
+            .expect(format!("expected reference {reference} not found in OpenAPI object").as_ref());
         self.resolve(ro)
     }
 }
@@ -88,7 +88,7 @@ pub struct OAS30SchemaRef {
 impl std::fmt::Debug for OAS30SchemaRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ref_source = &self.ref_source;
-        f.write_fmt(format_args!("OAS30SchemaRef[{ref_source:?}]"));
+        f.write_fmt(format_args!("OAS30SchemaRef[{ref_source:?}]"))?;
         Ok(())
     }
 }
@@ -200,7 +200,7 @@ impl Schema for OAS30SchemaRef {
         let mut m = HashMap::new();
         match &self.inner().schema_kind {
             SchemaKind::Type(Type::Object(t)) => {
-                for (k, v) in t.properties.iter() {
+                for (k, _v) in t.properties.iter() {
                     let ref_source = RefSource::SchemaProperty((Box::new(self.clone()), k.clone()));
                     let type_ = OAS30SchemaRef {
                         openapi: self.openapi.clone(),
@@ -285,10 +285,10 @@ impl Iterator for SchemaIterator {
         let schema_name = v.0.clone();
         let openapi = self.openapi.clone();
         let r = (
-            v.0.clone(),
+            schema_name.clone(),
             OAS30SchemaRef {
                 openapi,
-                ref_source: RefSource::SchemaName(v.0.clone()),
+                ref_source: RefSource::SchemaName(schema_name),
             },
         );
         self.curr = self.curr + 1;

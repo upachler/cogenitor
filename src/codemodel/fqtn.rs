@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 use lazy_static::*;
 use regex::Regex;
@@ -17,6 +17,17 @@ impl FQTN {
     }
     pub fn module_path(&self) -> Option<&str> {
         self.module_path.as_ref().map(|b| b.as_ref())
+    }
+    pub fn module_iter(&self) -> impl Iterator<Item = &str> {
+        match &self.module_path() {
+            Some(p) => p.split("::"),
+            None => {
+                // there must be an easier way to do this
+                let mut empty = "".split("x");
+                empty.next().unwrap();
+                empty
+            }
+        }
     }
     pub fn type_name(&self) -> &str {
         &self.type_name
@@ -212,4 +223,20 @@ pub fn test_builders() {
     assert_eq!(fqtn.crate_name(), "mycrate");
     assert_eq!(fqtn.module_path(), Some("foo::bar"));
     assert_eq!(fqtn.type_name(), "MyType");
+}
+
+#[test]
+pub fn test_parse() {
+    assert!(FQTN::from_str("Test").is_err());
+
+    let fqtn = FQTN::from_str("crate::Test").unwrap();
+    assert_eq!("crate", fqtn.crate_name());
+    assert!(fqtn.module_path().is_none());
+    assert!(fqtn.module_iter().next().is_none());
+    assert_eq!("Test", fqtn.type_name());
+
+    let fqtn = FQTN::from_str("std::string::String").unwrap();
+    assert_eq!("std", fqtn.crate_name());
+    assert_eq!("string", fqtn.module_path().unwrap());
+    assert_eq!("String", fqtn.type_name());
 }

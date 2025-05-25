@@ -1,7 +1,9 @@
 use anyhow::anyhow;
+use std::str::FromStr;
 use std::{collections::HashMap, io::Read, path::Path};
 
-use codemodel::{Codemodel, Scope, TypeRef};
+use codemodel::fqtn::FQTN;
+use codemodel::{Codemodel, Module, Scope, StructBuilder, TypeRef};
 use json::JsonValue;
 use types::{BooleanOrSchema, Schema, Spec};
 
@@ -21,7 +23,9 @@ pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<()> {
 
     let mut cm = Codemodel::new();
 
-    let type_map = populate_types(&spec, &mut cm)?;
+    let mut m = Module::new("crate");
+
+    let type_map = populate_types(&spec, &mut cm, &mut m)?;
 
     Ok(())
 }
@@ -31,11 +35,15 @@ struct TypeMapping {
     mapping: HashMap<String, TypeRef>,
 }
 
-fn populate_types(spec: &impl Spec, cm: &mut Codemodel) -> anyhow::Result<TypeMapping> {
+fn populate_types(
+    spec: &impl Spec,
+    cm: &mut Codemodel,
+    m: &mut Module,
+) -> anyhow::Result<TypeMapping> {
     let mapping = HashMap::new();
 
     for (name, schema) in spec.schemata_iter() {
-        _ = parse_schema(&schema, Some(name), cm)?;
+        _ = parse_schema(&schema, Some(name), cm, m)?;
     }
 
     Ok(TypeMapping { mapping })
@@ -100,17 +108,19 @@ fn parse_schema(
     schema: &impl Schema,
     name: Option<String>,
     cm: &mut Codemodel,
+    m: &mut Module,
 ) -> anyhow::Result<TypeRef> {
     let kind = type_kind_of(schema)?;
 
     match &kind {
         TypeKind::Struct => {
-            let mut b = cm.build_struct(name.as_ref().unwrap());
+            let mut b = StructBuilder::new(name.as_ref().unwrap());
             for (name, schema) in schema.properties() {
                 let type_ref = type_ref_of(cm, &schema)?;
-                b.field(&name, type_ref)?;
+                b = b.field(&name, type_ref)?;
             }
-            Ok(b.build()?)
+            let s = b.build()?;
+            Ok(m.insert_struct(s)?)
         }
         /*TypeKind::String => {
             let string_type = cm.type_string(&self);
@@ -128,7 +138,12 @@ fn parse_schema(
 
 fn type_ref_of(cm: &mut Codemodel, schema: &impl Schema) -> anyhow::Result<TypeRef> {
     match schema.name() {
-        Some(name) => Ok(cm.find_type(name).ok_or(anyhow!("type {name} not found"))?),
+        Some(name) => {
+            let fqtn = FQTN::from_str(name)?;
+            Ok(cm
+                .find_type(&fqtn)
+                .ok_or(anyhow!("type {name} not found"))?)
+        }
         None => match &schema.type_() {
             Some(types) => {
                 if types.len() != 1 {
