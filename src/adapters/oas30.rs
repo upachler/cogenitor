@@ -1,9 +1,10 @@
 use std::io::BufReader;
+use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
 use openapiv3::{OpenAPI, ReferenceOr};
 
-use crate::types::{BooleanOrSchema, Schema};
+use crate::types::{BooleanOrSchema, Schema, Spec};
 
 pub struct OAS30Spec {
     openapi: Rc<OpenAPI>,
@@ -241,22 +242,42 @@ impl Schema for OAS30SchemaRef {
     }
 }
 
+impl FromStr for OAS30Spec {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, anyhow::Error> {
+        let openapi: OpenAPI = serde_yaml::from_str(s)?;
+        Ok(openapi.into())
+    }
+}
+
+impl From<OpenAPI> for OAS30Spec {
+    fn from(openapi: OpenAPI) -> Self {
+        OAS30Spec {
+            openapi: Rc::new(openapi),
+        }
+    }
+}
+
 impl crate::Spec for OAS30Spec {
     type Schema = OAS30SchemaRef;
 
     fn from_reader(r: impl std::io::Read) -> anyhow::Result<impl crate::Spec> {
         let r = BufReader::new(r);
         let openapi: OpenAPI = serde_yaml::from_reader(r)?;
-        Ok(OAS30Spec {
-            openapi: Rc::new(openapi),
-        })
+        Ok(OAS30Spec::from(openapi))
     }
 
     fn schemata_iter(&self) -> impl Iterator<Item = (String, Self::Schema)> {
         SchemaIterator {
             openapi: self.openapi.clone(),
             curr: 0,
-            end: self.openapi.components.as_ref().unwrap().schemas.len(),
+            end: self
+                .openapi
+                .components
+                .as_ref()
+                .map(|c| c.schemas.len())
+                .unwrap_or(0),
         }
     }
 }
@@ -294,4 +315,17 @@ impl Iterator for SchemaIterator {
         self.curr = self.curr + 1;
         Some(r)
     }
+}
+
+#[test]
+fn test_empty() {
+    let oas = r"
+openapi: 3.0.0
+info:
+    title: Empty API
+    version: v1
+paths:";
+    println!("parting {oas}");
+    let spec = OAS30Spec::from_str(oas).unwrap();
+    assert!(spec.schemata_iter().next().is_none());
 }

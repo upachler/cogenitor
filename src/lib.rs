@@ -3,8 +3,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, io::Read, path::Path};
 
 use codemodel::fqtn::FQTN;
-use codemodel::{Codemodel, Module, Scope, StructBuilder, TypeRef};
-use json::JsonValue;
+use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 mod codemodel;
@@ -18,14 +17,24 @@ pub fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<()> {
     generate_from_reader::<S>(&mut file)
 }
 
+pub fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<()> {
+    let spec = S::from_str(s)?;
+    generate_code(&spec)?;
+    Ok(())
+}
+
 pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<()> {
     let spec = S::from_reader(input)?;
+    generate_code(&spec)?;
+    Ok(())
+}
 
+fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<()> {
     let mut cm = Codemodel::new();
 
     let mut m = Module::new("crate");
 
-    let type_map = populate_types(&spec, &mut cm, &mut m)?;
+    let type_map = populate_types(spec, &mut cm, &mut m)?;
 
     Ok(())
 }
@@ -186,7 +195,7 @@ mod tests {
 
     static PETSTORE_YAML: &[u8] = include_bytes!("test-data/petstore.yaml");
     #[test]
-    fn it_works() {
+    fn test_oas_petstore() {
         let reader = Cursor::new(PETSTORE_YAML);
         super::generate_from_reader::<adapters::oas30::OAS30Spec>(reader)
             .expect("reading petstore.yaml failed");

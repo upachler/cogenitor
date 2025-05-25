@@ -1,9 +1,9 @@
-use std::{collections::HashMap, io};
+use std::{collections::HashMap, io, str::FromStr};
 
 use json::JsonValue;
 
 /** An implementation of an OAS spec, specific to our needs for code generation */
-pub trait Spec {
+pub trait Spec: FromStr<Err = anyhow::Error> {
     type Schema: Schema;
 
     fn from_reader(r: impl io::Read) -> anyhow::Result<impl Spec>;
