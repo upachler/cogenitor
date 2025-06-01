@@ -1,9 +1,10 @@
 use std::hash::Hash;
 use std::io::BufReader;
+use std::ops::Deref;
 use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
-use openapiv3::{OpenAPI, ReferenceOr};
+use openapiv3::{OpenAPI, ReferenceOr, Type};
 
 use crate::types::{BooleanOrSchema, Schema, Spec};
 
@@ -196,11 +197,59 @@ impl From<&openapiv3::Type> for crate::types::Type {
     }
 }
 
+fn schema_name_of_reference_or(
+    reference_or: &ReferenceOr<impl Borrow<openapiv3::Schema>>,
+) -> Option<&str> {
+    let prefix = "#/components/schemas/";
+    match reference_or {
+        ReferenceOr::Reference { reference } => {
+            let schema_name = reference.strip_prefix(prefix).expect("reference to schema '{reference}' does not start with OAS standard schema prefix {prefix}");
+            Some(schema_name)
+        }
+        ReferenceOr::Item(_) => None,
+    }
+}
+
 impl Schema for OAS30SchemaRef {
     fn name(&self) -> Option<&str> {
         match &self.ref_source {
             RefSource::SchemaName(name) => Some(name),
-            _ => None,
+            RefSource::SchemaProperty((ref_source, name)) => {
+                // the name of a schema referenced via a property of
+                // onother schema is either tne name in the reference
+                // (e.g. '#/components/schemas/MySchemaName') or
+                // None for cases where the schema is inlined
+                if let openapiv3::SchemaKind::Type(Type::Object(o)) =
+                    &ref_source.inner().schema_kind
+                {
+                    schema_name_of_reference_or(o.properties.get(name)?)
+                } else {
+                    None
+                }
+            }
+            RefSource::Items(schema_ref) => {
+                if let openapiv3::SchemaKind::Type(Type::Array(a)) = &schema_ref.inner().schema_kind
+                {
+                    schema_name_of_reference_or(a.items.as_ref()?)
+                } else {
+                    None
+                }
+            }
+            RefSource::AdditionalProperties(schema_ref) => {
+                if let openapiv3::SchemaKind::Type(Type::Object(o)) =
+                    &schema_ref.inner().schema_kind
+                {
+                    match o.additional_properties.as_ref()? {
+                        openapiv3::AdditionalProperties::Any(_) => None,
+                        openapiv3::AdditionalProperties::Schema(reference_or) => {
+                            let reference_or = reference_or.as_ref();
+                            Some(schema_name_of_reference_or(&reference_or)?)
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 

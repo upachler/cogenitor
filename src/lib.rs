@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use std::{collections::HashMap, io::Read, path::Path};
+use std::{collections::HashMap, io::Read, ops::Deref, path::Path};
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
@@ -191,7 +191,11 @@ fn type_ref_of(
                     match types.get(0).unwrap() {
                         types::Type::Null => todo!(),
                         types::Type::Boolean => Ok(cm.type_bool()),
-                        types::Type::Object => todo!(),
+                        types::Type::Object => {
+                            todo!(
+                                "inlined schemata are currently unsupported, trying schema {schema:?}"
+                            )
+                        }
                         types::Type::Array => {
                             let items = schema.items().unwrap();
                             let item_schema = items.get(0).unwrap();

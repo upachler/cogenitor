@@ -15,6 +15,7 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
 representation of possible values of the [type](https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.21)
 keyword.
 */
+#[derive(Debug)]
 pub enum Type {
     Null,
     Boolean,
@@ -28,6 +29,7 @@ pub enum Type {
 Formats, as per
 https://spec.openapis.org/oas/v3.0.4.html#data-type-format
 */
+#[derive(Debug)]
 pub enum Format {
     Int32,
     Int64,
@@ -40,6 +42,7 @@ pub enum Format {
     Password,
 }
 
+#[derive(Debug)]
 pub enum BooleanOrSchema<S>
 where
     S: Schema,
