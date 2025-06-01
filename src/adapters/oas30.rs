@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
@@ -16,10 +17,16 @@ trait OAS3Resolver<T> {
         S: Borrow<T>,
     {
         match ro {
-            ReferenceOr::Reference { reference } => self.resolve_reference(reference),
+            ReferenceOr::Reference { reference } => {
+                let reference = reference
+                    .strip_prefix("#/components/schemas/")
+                    .expect(&format!("Only references to '#/components/schemas/*' are supported, '{reference}' does not match"));
+                self.resolve_reference(reference)
+            }
             ReferenceOr::Item(s) => Some(s.borrow()),
         }
     }
+
     fn resolve_reference(&self, reference: &str) -> Option<&T>;
 }
 
@@ -41,7 +48,9 @@ enum RefSource {
     SchemaName(String),
     SchemaProperty((Box<OAS30SchemaRef>, String)),
     AdditionalProperties(Box<OAS30SchemaRef>),
+    Items(Box<OAS30SchemaRef>),
 }
+
 impl std::fmt::Debug for RefSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -52,9 +61,45 @@ impl std::fmt::Debug for RefSource {
             RefSource::SchemaProperty((oas30_schema_ref, name)) => {
                 f.write_fmt(format_args!("{oas30_schema_ref:?}.properties.{name}"))
             }
+            RefSource::Items(oas30_schema_ref) => {
+                f.write_fmt(format_args!("{oas30_schema_ref:?}.items"))
+            }
         }
     }
 }
+
+impl Hash for RefSource {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            RefSource::SchemaName(n) => n.hash(state),
+            RefSource::SchemaProperty(p) => {
+                state.write("p".as_bytes());
+                p.0.hash(state);
+                p.1.hash(state);
+            }
+            RefSource::AdditionalProperties(r) => {
+                state.write("a".as_bytes());
+                r.hash(state)
+            }
+            RefSource::Items(r) => {
+                state.write("".as_bytes());
+                r.hash(state);
+            }
+        }
+    }
+}
+
+impl PartialEq for RefSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RefSource::SchemaName(s), RefSource::SchemaName(o)) => s.eq(o),
+            (RefSource::SchemaProperty(s), RefSource::SchemaProperty(o)) => s.eq(o),
+            (RefSource::AdditionalProperties(s), RefSource::AdditionalProperties(o)) => s.eq(o),
+            _ => false,
+        }
+    }
+}
+impl Eq for RefSource {}
 
 fn schema_from_additional_properties(
     oas_schema: &openapiv3::Schema,
@@ -65,6 +110,15 @@ fn schema_from_additional_properties(
             Some(AdditionalProperties::Schema(o)) => Some(o.as_ref()),
             _ => None,
         },
+        _ => None,
+    }
+}
+fn schema_from_items(
+    oas_schema: &openapiv3::Schema,
+) -> Option<&ReferenceOr<Box<openapiv3::Schema>>> {
+    use openapiv3::*;
+    match &oas_schema.schema_kind {
+        SchemaKind::Type(Type::Array(a)) => a.items.as_ref(),
         _ => None,
     }
 }
@@ -94,6 +148,19 @@ impl std::fmt::Debug for OAS30SchemaRef {
     }
 }
 
+impl Hash for OAS30SchemaRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ref_source.hash(state);
+    }
+}
+
+impl PartialEq for OAS30SchemaRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.ref_source.eq(&other.ref_source)
+    }
+}
+impl Eq for OAS30SchemaRef {}
+
 impl OAS30SchemaRef {
     fn inner(&self) -> &openapiv3::Schema {
         match &self.ref_source {
@@ -102,6 +169,10 @@ impl OAS30SchemaRef {
             }
             RefSource::AdditionalProperties(schema_ref) => {
                 let ro = schema_from_additional_properties(schema_ref.inner()).unwrap();
+                self.openapi.resolve(ro).unwrap()
+            }
+            RefSource::Items(schema_ref) => {
+                let ro = schema_from_items(schema_ref.inner()).unwrap();
                 self.openapi.resolve(ro).unwrap()
             }
             RefSource::SchemaProperty((schema_ref, name)) => {
@@ -129,8 +200,7 @@ impl Schema for OAS30SchemaRef {
     fn name(&self) -> Option<&str> {
         match &self.ref_source {
             RefSource::SchemaName(name) => Some(name),
-            RefSource::AdditionalProperties(_) => None,
-            RefSource::SchemaProperty(_) => None,
+            _ => None,
         }
     }
 
@@ -238,6 +308,19 @@ impl Schema for OAS30SchemaRef {
                 }
             }
             _ => BooleanOrSchema::<Self>::Boolean(true),
+        }
+    }
+
+    fn items(&self) -> Option<Vec<impl Schema>> {
+        match &self.inner().schema_kind {
+            openapiv3::SchemaKind::Type(openapiv3::Type::Array(_)) => {
+                let ref_source = RefSource::Items(Box::new(self.clone()));
+                Some(vec![OAS30SchemaRef {
+                    openapi: self.openapi.clone(),
+                    ref_source,
+                }])
+            }
+            _ => None,
         }
     }
 }

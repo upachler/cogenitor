@@ -1,5 +1,6 @@
 use std::{
-    borrow::Cow, collections::HashMap, error::Error, fmt::Display, ops::Deref, rc::Rc, str::FromStr,
+    borrow::Cow, cell::RefCell, collections::HashMap, error::Error, fmt::Display, ops::Deref,
+    rc::Rc, str::FromStr,
 };
 
 use fqtn::FQTN;
@@ -18,6 +19,7 @@ pub struct Codemodel {
 
 lazy_static! {
     static ref STRING_TYPE_NAME: FQTN = FQTN::from_str("std::string::String").unwrap();
+    static ref VEC_TYPE_NAME: FQTN = FQTN::from_str("std::vec::Vec").unwrap();
 }
 
 impl Codemodel {
@@ -39,6 +41,14 @@ impl Codemodel {
         };
         string.insert_struct(string_struct)?;
         std.insert_module(string)?;
+
+        let mut vec = Module::new("vec");
+        let vec_struct = Struct {
+            name: "Vec".to_owned(),
+            field_list: vec![],
+        };
+        vec.insert_struct(vec_struct);
+        std.insert_module(vec);
         self.insert_crate(std)?;
         Ok(self)
     }
@@ -56,6 +66,14 @@ impl Codemodel {
 
     pub fn find_crate(&self, crate_name: &str) -> Option<ModuleRef> {
         self.crate_namespace.find_item(crate_name)
+    }
+
+    /** Create a reference to an _instance_ if a generic type (e.g. Vec<u8>) */
+    pub fn type_instance(&mut self, generic_type: &TypeRef, type_params: &[TypeRef]) -> TypeRef {
+        TypeRef::GenericInstance {
+            generic_type: Box::new(generic_type.clone()),
+            type_parameter: type_params.into(),
+        }
     }
 
     #[allow(unused)]
@@ -100,6 +118,10 @@ impl Codemodel {
 
     pub fn type_string(&self) -> TypeRef {
         self.find_type(&STRING_TYPE_NAME).unwrap()
+    }
+
+    pub fn type_vec(&self) -> TypeRef {
+        self.find_type(&VEC_TYPE_NAME).unwrap()
     }
 }
 
@@ -149,6 +171,7 @@ impl StructBuilder {
     }
 }
 
+#[derive(Debug)]
 enum Builtin {
     U8,
     U16,
@@ -186,19 +209,49 @@ impl NamedItem for Builtin {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+enum Indirection {
+    // an indirection stub. This is used to indicate that the indirections's
+    // reference hasn't been set yet.
+    Stub(String),
+    Resolved(TypeRef),
+}
+
+#[derive(Clone, Debug)]
 pub enum TypeRef {
+    /// type name must be looked up via CodeModel
+    Indirection(Rc<RefCell<Indirection>>),
     Struct(Rc<Struct>),
     Builtin(Rc<Builtin>),
-    Alias(Rc<TypeRef>),
+    Alias(Box<TypeRef>),
+    GenericInstance {
+        generic_type: Box<TypeRef>,
+        type_parameter: Vec<TypeRef>,
+    },
 }
 
 impl NamedItem for TypeRef {
     fn name(&self) -> Cow<str> {
         match self {
+            TypeRef::Indirection(i) => match i.borrow().deref() {
+                Indirection::Stub(name) => Cow::Owned(name.to_string()),
+                Indirection::Resolved(type_ref) => Cow::Owned(type_ref.name().to_string()),
+            },
             TypeRef::Struct(s) => s.name(),
             TypeRef::Builtin(b) => b.name(),
             TypeRef::Alias(r) => r.name(),
+            TypeRef::GenericInstance {
+                generic_type,
+                type_parameter,
+            } => {
+                let generic_type = generic_type.name();
+                let param_list = type_parameter
+                    .iter()
+                    .map(|p| p.name().to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                Cow::Owned(format!("{generic_type}<{param_list}>"))
+            }
         }
     }
 }
@@ -212,11 +265,13 @@ trait NamedItem {
     fn name(&self) -> Cow<str>;
 }
 
+#[derive(Debug)]
 struct Field {
     name: String,
     type_ref: TypeRef,
 }
 
+#[derive(Debug)]
 pub struct Struct {
     name: String,
     field_list: Vec<Field>,
@@ -371,9 +426,34 @@ impl Module {
     }
     pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
         let struct_ref = TypeRef::from(s);
-        self.type_namespace.insert_item(struct_ref.clone())?;
+        if let Some(TypeRef::Indirection(i)) =
+            self.type_namespace.find_item(struct_ref.name().as_ref())
+        {
+            // if the name collides with a stub, we simply replace that stub,
+            // otherwise it's a proper name collision
+            let is_stub = match i.borrow().deref() {
+                Indirection::Stub(_) => true,
+                _ => false,
+            };
+            if is_stub {
+                let replacement = Indirection::Resolved(struct_ref.clone());
+                i.replace(replacement);
+            } else {
+                return Err(CodeError::ItemAlreadyPresent);
+            }
+        } else {
+            self.type_namespace.insert_item(struct_ref.clone())?;
+        }
         Ok(struct_ref)
     }
+
+    pub fn insert_type_stub(&mut self, name: &str) -> Result<TypeRef, CodeError> {
+        self.type_namespace
+            .insert_item(TypeRef::Indirection(Rc::new(RefCell::new(
+                Indirection::Stub(name.to_string()),
+            ))))
+    }
+
     fn insert_module(&mut self, m: Module) -> Result<ModuleRef, CodeError> {
         let m: ModuleRef = m.into();
         self.module_namespace.insert_item(m.clone())?;
@@ -389,7 +469,16 @@ impl NamedItem for Module {
 
 impl Scope for Module {
     fn find_type(&self, name: &str) -> Option<TypeRef> {
-        self.type_namespace.find_item(name)
+        match self.type_namespace.find_item(name) {
+            Some(target) => match target {
+                TypeRef::Indirection(i) => match i.borrow().deref() {
+                    Indirection::Stub(_) => None,
+                    Indirection::Resolved(inner_target) => Some(inner_target.clone()),
+                },
+                _ => Some(target),
+            },
+            None => None,
+        }
     }
 
     fn find_module(&self, name: &str) -> Option<ModuleRef> {
@@ -409,6 +498,25 @@ fn test_crates_and_mods() -> Result<(), anyhow::Error> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_stub() -> Result<(), anyhow::Error> {
+    let mut m = Module::new("crate");
+
+    m.insert_type_stub("Foo")?;
+
+    assert!(m.find_type("Foo").is_none());
+
+    let s = StructBuilder::new("Foo").build()?;
+    m.insert_struct(s)?;
+    let foo_ref = m.find_type("Foo");
+    if let Some(TypeRef::Struct(s)) = foo_ref {
+        assert_eq!("Foo", s.name());
+        return Ok(());
+    } else {
+        panic!("cannot find requested type 'Foo'");
+    }
 }
 
 #[test]

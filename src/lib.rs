@@ -1,8 +1,6 @@
 use anyhow::anyhow;
-use std::str::FromStr;
 use std::{collections::HashMap, io::Read, path::Path};
 
-use codemodel::fqtn::FQTN;
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
@@ -29,13 +27,19 @@ pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<()> {
+fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping)> {
     let mut cm = Codemodel::new();
 
     let mut m = Module::new("crate");
 
     let type_map = populate_types(spec, &mut cm, &mut m)?;
+    cm.insert_crate(m)?;
 
+    Ok((cm, type_map))
+}
+
+fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<()> {
+    let _ = build_codemodel(spec);
     Ok(())
 }
 
@@ -44,15 +48,34 @@ struct TypeMapping {
     mapping: HashMap<String, TypeRef>,
 }
 
+fn translate_schema_to_rust_typename(schema_name: &str) -> String {
+    // for now, all we do is clone..
+    schema_name.to_string()
+}
+
 fn populate_types(
     spec: &impl Spec,
     cm: &mut Codemodel,
     m: &mut Module,
 ) -> anyhow::Result<TypeMapping> {
-    let mapping = HashMap::new();
+    let mut mapping = HashMap::new();
 
+    // in order to properly deal with cyclic data structures, we create
+    // type stubs for all named schemata. This way, while constructing
+    // a type from a schema, we can refer to another type that we
+    // didn't construct yet.
+    for (name, _) in spec.schemata_iter() {
+        let rust_name = translate_schema_to_rust_typename(&name);
+        let type_ref = m.insert_type_stub(&rust_name)?;
+        mapping.insert(name, type_ref);
+    }
+
+    // we now construct all types properly. When inserting them into
+    // the module, stubs are replaced by proper types.
     for (name, schema) in spec.schemata_iter() {
-        _ = parse_schema(&schema, Some(name), cm, m)?;
+        println!("creating type for schema '{name}");
+        let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
+        mapping.insert(name, type_ref);
     }
 
     Ok(TypeMapping { mapping })
@@ -94,7 +117,7 @@ fn type_kind_of(schema: &impl Schema) -> anyhow::Result<TypeKind> {
                     }
                 }
                 types::Type::String => {
-                    if let Some(e) = schema.enum_() {
+                    if let Some(_e) = schema.enum_() {
                         kind = TypeKind::Enum;
                     } else {
                         kind = TypeKind::String
@@ -118,6 +141,7 @@ fn parse_schema(
     name: Option<String>,
     cm: &mut Codemodel,
     m: &mut Module,
+    mapping: &HashMap<String, TypeRef>,
 ) -> anyhow::Result<TypeRef> {
     let kind = type_kind_of(schema)?;
 
@@ -125,7 +149,7 @@ fn parse_schema(
         TypeKind::Struct => {
             let mut b = StructBuilder::new(name.as_ref().unwrap());
             for (name, schema) in schema.properties() {
-                let type_ref = type_ref_of(cm, &schema)?;
+                let type_ref = type_ref_of(cm, mapping, &schema)?;
                 b = b.field(&name, type_ref)?;
             }
             let s = b.build()?;
@@ -145,13 +169,17 @@ fn parse_schema(
     }
 }
 
-fn type_ref_of(cm: &mut Codemodel, schema: &impl Schema) -> anyhow::Result<TypeRef> {
+fn type_ref_of(
+    cm: &mut Codemodel,
+    mapping: &HashMap<String, TypeRef>,
+    schema: &impl Schema,
+) -> anyhow::Result<TypeRef> {
     match schema.name() {
         Some(name) => {
-            let fqtn = FQTN::from_str(name)?;
-            Ok(cm
-                .find_type(&fqtn)
-                .ok_or(anyhow!("type {name} not found"))?)
+            let type_ref = mapping
+                .get(name)
+                .ok_or_else(|| anyhow!("no mapping found for schema type {name}"))?;
+            Ok(type_ref.clone())
         }
         None => match &schema.type_() {
             Some(types) => {
@@ -164,7 +192,12 @@ fn type_ref_of(cm: &mut Codemodel, schema: &impl Schema) -> anyhow::Result<TypeR
                         types::Type::Null => todo!(),
                         types::Type::Boolean => Ok(cm.type_bool()),
                         types::Type::Object => todo!(),
-                        types::Type::Array => todo!(),
+                        types::Type::Array => {
+                            let items = schema.items().unwrap();
+                            let item_schema = items.get(0).unwrap();
+                            let item_type = type_ref_of(cm, mapping, item_schema).unwrap();
+                            Ok(cm.type_instance(&cm.type_vec(), &vec![item_type]))
+                        }
                         types::Type::Number => match schema.format() {
                             Some(format) => Ok(match format {
                                 types::Format::Int32 => cm.type_i32(),
@@ -189,7 +222,9 @@ fn type_ref_of(cm: &mut Codemodel, schema: &impl Schema) -> anyhow::Result<TypeR
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, str::FromStr};
+
+    use crate::codemodel::Scope;
 
     use super::*;
 
@@ -199,5 +234,51 @@ mod tests {
         let reader = Cursor::new(PETSTORE_YAML);
         super::generate_from_reader::<adapters::oas30::OAS30Spec>(reader)
             .expect("reading petstore.yaml failed");
+    }
+
+    #[test]
+    fn test_empty() {
+        let oas = r"
+            openapi: 3.0.0
+            info:
+                title: Empty API
+                version: v1
+            paths:
+            components:
+            ";
+        super::generate_from_str::<adapters::oas30::OAS30Spec>(oas).unwrap()
+    }
+
+    #[test]
+    fn test_simple_pet() -> anyhow::Result<()> {
+        let oas = r"
+            openapi: 3.0.0
+            info:
+                title: Empty API
+                version: v1
+            paths:
+            components:
+                schemas:
+                    Pet:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                            species:
+                                type: string";
+
+        let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
+        assert_eq!(1, spec.schemata_iter().count());
+        let (cm, mapping) = super::build_codemodel(&spec)?;
+        assert!(mapping.mapping.contains_key("Pet"));
+        let crate_ = cm.find_crate("crate").unwrap();
+        let pet = crate_.find_type("Pet").unwrap();
+        match &pet {
+            TypeRef::Struct(s) => {
+                assert_eq!(2, s.field_iter().count())
+            }
+            _ => panic!("struct expected, found {pet:?}"),
+        }
+        Ok(())
     }
 }

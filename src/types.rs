@@ -53,7 +53,7 @@ Represents a schema for validating a JSON data item.
 We use this for type generation, so only fields relevant for this purpose are implemented.
 See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
-pub trait Schema: Clone + std::fmt::Debug {
+pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq {
     /**
     If this schema is named (i.e. a YAML/JSON key is associated with its definition),
     this method returns that name.
@@ -90,4 +90,10 @@ pub trait Schema: Clone + std::fmt::Debug {
     fn pattern_properties(&self) -> HashMap<String, impl Schema>;
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.18 */
     fn addtional_properties(&self) -> BooleanOrSchema<impl Schema>;
+
+    /**
+    see 'items' following https://spec.openapis.org/oas/v3.0.4.html#x4-7-24-1-json-schema-keywords
+    see https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.9
+    */
+    fn items(&self) -> Option<Vec<impl Schema>>;
 }

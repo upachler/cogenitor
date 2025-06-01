@@ -4,7 +4,7 @@ use lazy_static::*;
 use regex::Regex;
 
 /** Fully Qualified Type Name */
-#[derive(PartialEq, PartialOrd, Debug)]
+#[derive(PartialEq, PartialOrd, Debug, Clone)]
 pub struct FQTN {
     crate_name: Box<str>,
     module_path: Option<Box<str>>,
@@ -160,7 +160,7 @@ impl FQTNBuilderModOrTypeName for FQTNBuilder {
         self
     }
 
-    fn type_name(mut self, type_name: &str) -> FQTN {
+    fn type_name(self, type_name: &str) -> FQTN {
         let module_path = if self.modules.is_empty() {
             None
         } else {
