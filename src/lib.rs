@@ -1,10 +1,11 @@
 use anyhow::anyhow;
-use std::{collections::HashMap, io::Read, ops::Deref, path::Path};
+use std::{collections::HashMap, io::Read, path::Path};
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 mod codemodel;
+mod codewriter;
 mod types;
 
 mod adapters;
@@ -39,7 +40,11 @@ fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping)
 }
 
 fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<()> {
-    let _ = build_codemodel(spec);
+    let (codemodel, _) = build_codemodel(spec)?;
+
+    let ts = codewriter::write_to_token_stream(&codemodel, "crate")?;
+
+    println!("token stream: {ts}");
     Ok(())
 }
 

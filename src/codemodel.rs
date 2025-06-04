@@ -210,11 +210,29 @@ impl NamedItem for Builtin {
 }
 
 #[derive(Clone, Debug)]
-enum Indirection {
+pub enum Indirection {
     // an indirection stub. This is used to indicate that the indirections's
     // reference hasn't been set yet.
     Stub(String),
     Resolved(TypeRef),
+}
+
+#[derive(Clone, Debug)]
+pub struct Alias {
+    name: String,
+    target: TypeRef,
+}
+
+impl Alias {
+    pub fn target(&self) -> &TypeRef {
+        &self.target
+    }
+}
+
+impl NamedItem for Alias {
+    fn name(&self) -> Cow<str> {
+        (&self.name).into()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -223,7 +241,7 @@ pub enum TypeRef {
     Indirection(Rc<RefCell<Indirection>>),
     Struct(Rc<Struct>),
     Builtin(Rc<Builtin>),
-    Alias(Box<TypeRef>),
+    Alias(Rc<Alias>),
     GenericInstance {
         generic_type: Box<TypeRef>,
         type_parameter: Vec<TypeRef>,
@@ -261,14 +279,25 @@ impl From<Struct> for TypeRef {
     }
 }
 
-trait NamedItem {
+pub trait NamedItem {
     fn name(&self) -> Cow<str>;
 }
 
 #[derive(Debug)]
-struct Field {
+pub struct Field {
     name: String,
     type_ref: TypeRef,
+}
+
+impl Field {
+    pub fn type_(&self) -> &TypeRef {
+        &self.type_ref
+    }
+}
+impl NamedItem for Field {
+    fn name(&self) -> Cow<str> {
+        Cow::Borrowed(&self.name)
+    }
 }
 
 #[derive(Debug)]
@@ -278,7 +307,7 @@ pub struct Struct {
 }
 
 impl Struct {
-    pub fn field_iter(&self) -> impl Iterator {
+    pub fn field_iter(&self) -> impl Iterator<Item = &Field> {
         self.field_list.iter()
     }
 }
@@ -424,6 +453,15 @@ impl Module {
             type_namespace: Default::default(),
         }
     }
+
+    pub fn type_iter(&self) -> impl Iterator<Item = &TypeRef> {
+        self.type_namespace.item_list.iter()
+    }
+
+    pub fn mod_iter(&self) -> impl Iterator<Item = &ModuleRef> {
+        self.module_namespace.item_list.iter()
+    }
+
     pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
         let struct_ref = TypeRef::from(s);
         if let Some(TypeRef::Indirection(i)) =
@@ -452,6 +490,14 @@ impl Module {
             .insert_item(TypeRef::Indirection(Rc::new(RefCell::new(
                 Indirection::Stub(name.to_string()),
             ))))
+    }
+
+    pub fn insert_type_alias(&mut self, name: &str, target: TypeRef) -> Result<TypeRef, CodeError> {
+        self.type_namespace
+            .insert_item(TypeRef::Alias(Rc::new(Alias {
+                name: name.to_string(),
+                target,
+            })))
     }
 
     fn insert_module(&mut self, m: Module) -> Result<ModuleRef, CodeError> {

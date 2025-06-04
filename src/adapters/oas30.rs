@@ -1,6 +1,5 @@
 use std::hash::Hash;
 use std::io::BufReader;
-use std::ops::Deref;
 use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
