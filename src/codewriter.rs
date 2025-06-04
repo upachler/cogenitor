@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
-use crate::codemodel::{Codemodel, Indirection, Module, NamedItem, Struct, StructBuilder, TypeRef};
+use crate::codemodel::{Codemodel, Indirection, NamedItem, TypeRef};
 
 // useful read on working with proc_macro2, quote and syn:
 // https://petanode.com/posts/rust-proc-macro/

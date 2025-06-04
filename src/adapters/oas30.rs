@@ -5,7 +5,7 @@ use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
 use openapiv3::{OpenAPI, ReferenceOr, Type};
 
-use crate::types::{BooleanOrSchema, Schema, Spec};
+use crate::types::{BooleanOrSchema, Schema};
 
 pub struct OAS30Spec {
     openapi: Rc<OpenAPI>,
