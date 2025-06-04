@@ -47,8 +47,8 @@ impl Codemodel {
             name: "Vec".to_owned(),
             field_list: vec![],
         };
-        vec.insert_struct(vec_struct);
-        std.insert_module(vec);
+        vec.insert_struct(vec_struct)?;
+        std.insert_module(vec)?;
         self.insert_crate(std)?;
         Ok(self)
     }
@@ -132,12 +132,8 @@ pub struct StructBuilder {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StructBuilderError {
-    #[error("name missing")]
-    NameMissing,
     #[error("a field with that name already exists")]
     DuplicateFieldName,
-    #[error("a struct with that name already exists")]
-    DuplicateStructName,
 }
 
 impl StructBuilder {
@@ -162,17 +158,16 @@ impl StructBuilder {
         Ok(self)
     }
 
-    pub fn build(mut self) -> Result<Struct, StructBuilderError> {
-        let name = self.name;
-
-        let mut field_list = Vec::new();
-        field_list.append(&mut self.fields);
-        Ok(Struct { name, field_list })
+    pub fn build(self) -> Result<Struct, StructBuilderError> {
+        Ok(Struct {
+            name: self.name,
+            field_list: self.fields,
+        })
     }
 }
 
 #[derive(Debug)]
-enum Builtin {
+pub enum Builtin {
     U8,
     U16,
     U32,

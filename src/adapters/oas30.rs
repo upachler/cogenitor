@@ -450,6 +450,8 @@ impl Iterator for SchemaIterator {
 
 #[test]
 fn test_empty() {
+    use crate::types::Spec;
+
     let oas = r"
 openapi: 3.0.0
 info:

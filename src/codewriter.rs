@@ -65,6 +65,7 @@ fn syn_type_name_of(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
 
 #[test]
 fn test_write_code() -> anyhow::Result<()> {
+    use crate::codemodel::{Module, StructBuilder};
     use assert_tokenstreams_eq::assert_tokenstreams_eq;
 
     let mut cm = Codemodel::new();
