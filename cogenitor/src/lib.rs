@@ -237,7 +237,7 @@ mod tests {
 
     use super::*;
 
-    static PETSTORE_YAML: &[u8] = include_bytes!("test-data/petstore.yaml");
+    static PETSTORE_YAML: &[u8] = include_bytes!("../../test-data/petstore.yaml");
     #[test]
     fn test_oas_petstore() {
         let reader = Cursor::new(PETSTORE_YAML);

@@ -1,3 +1,3 @@
 [workspace]
 resolver="3"
-members=["cogenitor", "cogenitor-test"]
+members=["cogenitor", "cogenitor-macro", "cogenitor-test"]

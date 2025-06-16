@@ -58,6 +58,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogenitor-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "cogenitor-test"
 version = "0.1.0"
 dependencies = [
