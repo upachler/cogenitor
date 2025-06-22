@@ -1,0 +1,20 @@
+[package]
+name = "cogenitor-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"
+json = "0.12.4"
+lazy_static = "1.5.0"
+openapiv3 = "2.0.0"
+proc-macro2 = "1.0.95"
+quote = "1.0.40"
+regex = "1.11.1"
+serde_yaml = "0.9.34"
+syn = "2.0.101"
+thiserror = "2.0.12"
+yaml-rust2 = "0.10.1"
+
+[dev-dependencies]
+assert-tokenstreams-eq = "0.1.0"
