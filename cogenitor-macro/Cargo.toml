@@ -7,6 +7,7 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
+anyhow = "1.0.98"
 cogenitor-core = { version = "0.1.0", path = "../cogenitor-core" }
 proc-macro2 = "1.0.95"
 quote = "1.0.40"

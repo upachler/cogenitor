@@ -1,5 +1,8 @@
-use proc_macro2::{Ident, TokenStream};
+use anyhow::anyhow;
+use cogenitor_core::adapters::oas30::OAS30Spec;
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, quote};
+
 use syn::{
     Attribute, Expr, ExprLit, LitStr, Meta, MetaNameValue, Path, Token,
     parse::{Parse, ParseStream},
@@ -109,21 +112,42 @@ impl ApiConfig {
 
 // Main macro implementation
 pub(super) fn generate_code(config: ApiConfig) -> TokenStream {
+    match generate_code_impl(config) {
+        Ok(ts) => ts,
+        Err(e) => match e.downcast_ref::<syn::Error>() {
+            Some(e) => e.to_compile_error(),
+            None => {
+                let message = e.to_string();
+                syn::Error::new(Span::call_site(), message).to_compile_error()
+            }
+        },
+    }
+}
+
+fn generate_code_impl(config: ApiConfig) -> anyhow::Result<TokenStream> {
     let module_name = config
         .module_name
         .unwrap_or_else(|| "generated_api".to_string());
     let module_ident = Ident::new(&module_name, proc_macro2::Span::call_site());
 
-    quote! {
+    let path = config
+        .path
+        .ok_or(anyhow!("no path to OpenAPI file specified"))?;
+    let path = std::path::Path::new(&path);
+    let types = cogenitor_core::generate_from_path::<OAS30Spec>(path)?;
+
+    let ts = quote! {
         pub mod #module_ident {
             #![allow(unused_imports)]
 
             use std::path::Path;
 
-
+            #types
         }
     }
-    .into()
+    .into();
+
+    Ok(ts)
 }
 
 pub(crate) fn parse_config(input: TokenStream) -> syn::Result<ApiConfig> {

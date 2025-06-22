@@ -68,6 +68,7 @@ dependencies = [
 name = "cogenitor-macro"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cogenitor-core",
  "proc-macro2",
  "quote",

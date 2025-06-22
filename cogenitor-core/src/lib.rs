@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use proc_macro2::TokenStream;
 use std::{collections::HashMap, io::Read, path::Path};
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
@@ -8,24 +9,22 @@ mod codemodel;
 mod codewriter;
 mod types;
 
-mod adapters;
+pub mod adapters;
 
-pub fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<()> {
+pub fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<TokenStream> {
     let mut file = std::fs::File::open(path)?;
 
     generate_from_reader::<S>(&mut file)
 }
 
-pub fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<()> {
+pub fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
     let spec = S::from_str(s)?;
-    generate_code(&spec)?;
-    Ok(())
+    generate_code(&spec)
 }
 
-pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<()> {
+pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<TokenStream> {
     let spec = S::from_reader(input)?;
-    generate_code(&spec)?;
-    Ok(())
+    generate_code(&spec)
 }
 
 fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping)> {
@@ -39,13 +38,13 @@ fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping)
     Ok((cm, type_map))
 }
 
-fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<()> {
+fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<TokenStream> {
     let (codemodel, _) = build_codemodel(spec)?;
 
     let ts = codewriter::write_to_token_stream(&codemodel, "crate")?;
 
     println!("token stream: {ts}");
-    Ok(())
+    Ok(ts)
 }
 
 /** Maps OpenAPI type names to actual Codemodel [TypeRef]s instances */

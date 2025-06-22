@@ -1,9 +1,6 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use syn::LitStr;
-
-use crate::procmacro::ApiConfig;
 
 mod procmacro;
 
