@@ -7,6 +7,7 @@ use types::{BooleanOrSchema, Schema, Spec};
 
 mod codemodel;
 mod codewriter;
+mod translate;
 mod types;
 
 pub mod adapters;
@@ -52,11 +53,6 @@ struct TypeMapping {
     mapping: HashMap<String, TypeRef>,
 }
 
-fn translate_schema_to_rust_typename(schema_name: &str) -> String {
-    // for now, all we do is clone..
-    schema_name.to_string()
-}
-
 fn populate_types(
     spec: &impl Spec,
     cm: &mut Codemodel,
@@ -69,7 +65,7 @@ fn populate_types(
     // a type from a schema, we can refer to another type that we
     // didn't construct yet.
     for (name, _) in spec.schemata_iter() {
-        let rust_name = translate_schema_to_rust_typename(&name);
+        let rust_name = translate::schema_to_rust_typename(&name);
         let type_ref = m.insert_type_stub(&rust_name)?;
         mapping.insert(name, type_ref);
     }
@@ -153,8 +149,9 @@ fn parse_schema(
         TypeKind::Struct => {
             let mut b = StructBuilder::new(name.as_ref().unwrap());
             for (name, schema) in schema.properties() {
+                let rust_name = translate::property_to_rust_fieldname(&name);
                 let type_ref = type_ref_of(cm, mapping, &schema)?;
-                b = b.field(&name, type_ref)?;
+                b = b.field(&rust_name, type_ref)?;
             }
             let s = b.build()?;
             Ok(m.insert_struct(s)?)
