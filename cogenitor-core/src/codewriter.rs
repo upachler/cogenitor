@@ -37,9 +37,9 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                 let field_name = Ident::new(&f.name(), Span::call_site());
                 let syn_type_ref = syn_type_name_of(f.type_())?;
                 let field_type: TokenStream = syn_type_ref.to_token_stream();
-                struct_fields.push(quote!(#field_name: #field_type));
+                struct_fields.push(quote!(pub #field_name: #field_type));
             }
-            quote!(struct #struct_name {
+            quote!(pub struct #struct_name {
                 #(#struct_fields),*
             })
         }
@@ -101,16 +101,16 @@ fn test_write_code() -> anyhow::Result<()> {
     println!("{ts}");
 
     let ts_reference = quote!(
-        struct Bar {
-            has_handles: bool,
+        pub struct Bar {
+            pub has_handles: bool,
         }
         type BarAlias = Bar;
-        struct Foo {
-            bar: Bar,
-            bar_alias: BarAlias,
-            name: String,
-            other_names: Vec<String>,
-            zab: u8,
+        pub struct Foo {
+            pub bar: Bar,
+            pub bar_alias: BarAlias,
+            pub name: String,
+            pub other_names: Vec<String>,
+            pub zab: u8,
         }
     );
     assert_tokenstreams_eq!(&ts, &ts_reference);

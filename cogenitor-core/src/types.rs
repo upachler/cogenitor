@@ -14,8 +14,9 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
 /**
 representation of possible values of the [type](https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.21)
 keyword.
+Note that we do not distinguish between `number` and `integer` for the same reasons described in the section about integegers [here](https://spec.openapis.org/oas/v3.0.4.html#data-types)
 */
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Null,
     Boolean,
@@ -29,7 +30,7 @@ pub enum Type {
 Formats, as per
 https://spec.openapis.org/oas/v3.0.4.html#data-type-format
 */
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Format {
     Int32,
     Int64,

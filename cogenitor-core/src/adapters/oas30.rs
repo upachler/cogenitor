@@ -5,6 +5,8 @@ use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
 use openapiv3::{OpenAPI, ReferenceOr, Type};
 
+#[cfg(test)]
+use crate::types::Format;
 use crate::types::{BooleanOrSchema, Schema};
 
 pub struct OAS30Spec {
@@ -263,8 +265,22 @@ impl Schema for OAS30SchemaRef {
         use openapiv3::*;
         match &self.inner().schema_kind {
             SchemaKind::Type(Type::Number(number_type)) => match number_type.format {
-                VariantOrUnknownOrEmpty::Item(NumberFormat::Double) => {
-                    Some(crate::types::Format::Double)
+                VariantOrUnknownOrEmpty::Item(number_format) => {
+                    let fmt = match number_format {
+                        NumberFormat::Float => crate::types::Format::Float,
+                        NumberFormat::Double => crate::types::Format::Double,
+                    };
+                    Some(fmt)
+                }
+                _ => None,
+            },
+            SchemaKind::Type(Type::Integer(integer_type)) => match integer_type.format {
+                VariantOrUnknownOrEmpty::Item(integer_format) => {
+                    let fmt = match integer_format {
+                        IntegerFormat::Int32 => crate::types::Format::Int32,
+                        IntegerFormat::Int64 => crate::types::Format::Int64,
+                    };
+                    Some(fmt)
                 }
                 _ => None,
             },
@@ -458,7 +474,77 @@ info:
     title: Empty API
     version: v1
 paths:";
-    println!("parting {oas}");
+    println!("parsing {oas}");
     let spec = OAS30Spec::from_str(oas).unwrap();
     assert!(spec.schemata_iter().next().is_none());
+}
+
+#[test]
+fn test_number_formats() {
+    use crate::types::Spec;
+
+    let oas = r"
+openapi: 3.0.0
+info:
+    title: Number Formats
+    version: v1
+paths: {}
+components:
+    schemas:
+        NumberFormats:
+            type: object
+            properties:
+                number_unformatted:
+                    type: number
+                number_double:
+                    type: number
+                    format: double
+                number_float:
+                    type: number
+                    format: float
+                integer_int64:
+                    type: integer
+                    format: int64
+                integer_int32:
+                    type: integer
+                    format: int32
+";
+    println!("parsing {oas}");
+    let spec = OAS30Spec::from_str(oas).unwrap();
+    let nf = spec.schemata_iter().next().unwrap();
+    assert_eq!(nf.0, "NumberFormats");
+    let nf_props = nf.1.properties();
+
+    let schema = nf_props.get("number_unformatted").unwrap();
+    assert_eq!(type_of(schema), Some(crate::types::Type::Number));
+    assert_eq!(schema.format(), None);
+
+    let schema = nf_props.get("number_double").unwrap();
+    assert_eq!(type_of(schema), Some(crate::types::Type::Number));
+    assert_eq!(schema.format(), Some(Format::Double));
+
+    let schema = nf_props.get("number_float").unwrap();
+    assert_eq!(type_of(schema), Some(crate::types::Type::Number));
+    assert_eq!(schema.format(), Some(Format::Float));
+
+    let schema = nf_props.get("integer_int64").unwrap();
+    assert_eq!(type_of(schema), Some(crate::types::Type::Number));
+    assert_eq!(schema.format(), Some(Format::Int64));
+
+    let schema = nf_props.get("integer_int32").unwrap();
+    assert_eq!(type_of(schema), Some(crate::types::Type::Number));
+    assert_eq!(schema.format(), Some(Format::Int32));
+}
+
+#[cfg(test)]
+fn type_of(s: &impl Schema) -> Option<crate::types::Type> {
+    if let Some(types) = s.type_() {
+        if types.len() != 1 {
+            None
+        } else {
+            Some(types[0].clone())
+        }
+    } else {
+        None
+    }
 }
