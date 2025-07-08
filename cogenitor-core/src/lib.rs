@@ -251,7 +251,7 @@ mod tests {
             paths:
             components:
             ";
-        super::generate_from_str::<adapters::oas30::OAS30Spec>(oas).unwrap()
+        super::generate_from_str::<adapters::oas30::OAS30Spec>(oas).unwrap();
     }
 
     #[test]
