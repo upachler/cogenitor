@@ -125,9 +125,40 @@ impl Codemodel {
     }
 }
 
+/// Builder for constructing field lists with duplicate field name checking.
+///
+/// This is a shared utility used internally by both `StructBuilder` and
+/// `EnumBuilder` to provide consistent field building behavior
+/// and eliminate code duplication.
+pub struct FieldListBuilder {
+    fields: Vec<Field>,
+}
+
+impl FieldListBuilder {
+    fn new() -> Self {
+        FieldListBuilder { fields: Vec::new() }
+    }
+
+    pub fn field(mut self, name: &str, type_ref: TypeRef) -> Result<Self, StructBuilderError> {
+        if self.fields.iter().any(|f| f.name.eq(name)) {
+            return Err(StructBuilderError::DuplicateFieldName);
+        }
+        let field = Field {
+            name: name.to_string(),
+            type_ref,
+        };
+        self.fields.push(field);
+        Ok(self)
+    }
+
+    pub fn build(self) -> Vec<Field> {
+        self.fields
+    }
+}
+
 pub struct StructBuilder {
     name: String,
-    fields: Vec<Field>,
+    field_builder: FieldListBuilder,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -195,34 +226,28 @@ pub struct EnumBuilder {
 pub enum EnumBuilderError {
     #[error("a variant with that name already exists")]
     DuplicateVariantName,
+    #[error("a field with that name already exists")]
+    DuplicateFieldName,
 }
 
 impl StructBuilder {
     pub fn new(name: &str) -> Self {
         StructBuilder {
             name: name.to_string(),
-            fields: Vec::new(),
+            field_builder: FieldListBuilder::new(),
         }
     }
 
     /** Add new field with given name and type, referenced by name */
     pub fn field(mut self, name: &str, type_ref: TypeRef) -> Result<Self, StructBuilderError> {
-        if self.fields.iter().any(|f| f.name.eq(name)) {
-            return Err(StructBuilderError::DuplicateFieldName);
-        }
-        let field = Field {
-            name: name.to_string(),
-            type_ref,
-        };
-        self.fields.push(field);
-
+        self.field_builder = self.field_builder.field(name, type_ref)?;
         Ok(self)
     }
 
     pub fn build(self) -> Result<Struct, StructBuilderError> {
         Ok(Struct {
             name: self.name,
-            field_list: self.fields,
+            field_list: self.field_builder.build(),
         })
     }
 }
@@ -263,17 +288,26 @@ impl EnumBuilder {
         Ok(self)
     }
 
-    pub fn struct_variant(
+    pub fn struct_variant<F>(
         mut self,
         name: &str,
-        fields: Vec<Field>,
-    ) -> Result<Self, EnumBuilderError> {
+        field_builder: F,
+    ) -> Result<Self, EnumBuilderError>
+    where
+        F: FnOnce(FieldListBuilder) -> Result<FieldListBuilder, StructBuilderError>,
+    {
         if self.variants.iter().any(|v| v.name.eq(name)) {
             return Err(EnumBuilderError::DuplicateVariantName);
         }
+
+        let builder = FieldListBuilder::new();
+
+        let completed_builder = field_builder(builder).map_err(|e| match e {
+            StructBuilderError::DuplicateFieldName => EnumBuilderError::DuplicateFieldName,
+        })?;
         let variant = EnumVariant {
             name: name.to_string(),
-            data: EnumVariantData::Struct(fields),
+            data: EnumVariantData::Struct(completed_builder.build()),
         };
         self.variants.push(variant);
         Ok(self)
@@ -745,23 +779,33 @@ fn test_buider() -> Result<(), anyhow::Error> {
 fn test_enum_builder() -> Result<(), anyhow::Error> {
     let mut cm = Codemodel::new();
 
-    let e = EnumBuilder::new("Color")
-        .unit_variant("Red")?
-        .unit_variant("Green")?
-        .unit_variant("Blue")?
-        .tuple_variant("Custom", vec![cm.type_u8(), cm.type_u8(), cm.type_u8()])?
+    let e = EnumBuilder::new("Shape")
+        .unit_variant("Circle")?
+        .unit_variant("Square")?
+        .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
+        // Test struct variant with closure-based field builder
+        .struct_variant("Point", |builder| {
+            builder.field("x", cm.type_f64())?.field("y", cm.type_f64())
+        })?
+        .struct_variant("Line", |builder| {
+            builder
+                .field("start_x", cm.type_f64())?
+                .field("start_y", cm.type_f64())?
+                .field("end_x", cm.type_f64())?
+                .field("end_y", cm.type_f64())
+        })?
         .build()?;
 
     let mut m = Module::new("crate");
     m.insert_enum(e)?;
     cm.insert_crate(m)?;
 
-    let type_color = cm
-        .find_type(&FQTN::from_str("crate::Color").unwrap())
+    let type_shape = cm
+        .find_type(&FQTN::from_str("crate::Shape").unwrap())
         .expect("Type not found");
-    match type_color {
+    match type_shape {
         TypeRef::Enum(e) => {
-            assert_eq!(e.variant_iter().count(), 4);
+            assert_eq!(e.variant_iter().count(), 5);
 
             // Collect variants into a map for easier checking
             let variants: std::collections::HashMap<String, &EnumVariant> = e
@@ -769,42 +813,72 @@ fn test_enum_builder() -> Result<(), anyhow::Error> {
                 .map(|v| (v.name().to_string(), v))
                 .collect();
 
-            // Check Red variant (Unit)
-            let red = variants.get("Red").expect("Red variant not found");
-            match red.data() {
+            // Check Circle variant (Unit)
+            let circle = variants.get("Circle").expect("Circle variant not found");
+            match circle.data() {
                 EnumVariantData::Unit => {}
-                _ => panic!("Red should be a unit variant"),
+                _ => panic!("Circle should be a unit variant"),
             }
 
-            // Check Green variant (Unit)
-            let green = variants.get("Green").expect("Green variant not found");
-            match green.data() {
+            // Check Square variant (Unit)
+            let square = variants.get("Square").expect("Square variant not found");
+            match square.data() {
                 EnumVariantData::Unit => {}
-                _ => panic!("Green should be a unit variant"),
+                _ => panic!("Square should be a unit variant"),
             }
 
-            // Check Blue variant (Unit)
-            let blue = variants.get("Blue").expect("Blue variant not found");
-            match blue.data() {
-                EnumVariantData::Unit => {}
-                _ => panic!("Blue should be a unit variant"),
-            }
-
-            // Check Custom variant (Tuple with 3 u8 types)
-            let custom = variants.get("Custom").expect("Custom variant not found");
-            match custom.data() {
+            // Check Rectangle variant (Tuple with 2 f64 types)
+            let rectangle = variants
+                .get("Rectangle")
+                .expect("Rectangle variant not found");
+            match rectangle.data() {
                 EnumVariantData::Tuple(types) => {
-                    assert_eq!(types.len(), 3);
+                    assert_eq!(types.len(), 2);
                     for type_ref in types {
                         match type_ref {
                             TypeRef::Builtin(builtin) => {
-                                assert_eq!(builtin.name(), "u8");
+                                assert_eq!(builtin.name(), "f64");
                             }
-                            _ => panic!("Custom variant should contain u8 types"),
+                            _ => panic!("Rectangle variant should contain f64 types"),
                         }
                     }
                 }
-                _ => panic!("Custom should be a tuple variant"),
+                _ => panic!("Rectangle should be a tuple variant"),
+            }
+
+            // Check Point variant (Struct with x, y fields)
+            let point = variants.get("Point").expect("Point variant not found");
+            match point.data() {
+                EnumVariantData::Struct(fields) => {
+                    assert_eq!(fields.len(), 2);
+                    let field_map: std::collections::HashMap<String, &Field> =
+                        fields.iter().map(|f| (f.name().to_string(), f)).collect();
+
+                    let x_field = field_map.get("x").expect("x field not found");
+                    assert_eq!(x_field.type_().name(), "f64");
+
+                    let y_field = field_map.get("y").expect("y field not found");
+                    assert_eq!(y_field.type_().name(), "f64");
+                }
+                _ => panic!("Point should be a struct variant"),
+            }
+
+            // Check Line variant (Struct with start_x, start_y, end_x, end_y fields)
+            let line = variants.get("Line").expect("Line variant not found");
+            match line.data() {
+                EnumVariantData::Struct(fields) => {
+                    assert_eq!(fields.len(), 4);
+                    let field_map: std::collections::HashMap<String, &Field> =
+                        fields.iter().map(|f| (f.name().to_string(), f)).collect();
+
+                    for field_name in ["start_x", "start_y", "end_x", "end_y"] {
+                        let field = field_map
+                            .get(field_name)
+                            .expect(&format!("{field_name} field not found"));
+                        assert_eq!(field.type_().name(), "f64");
+                    }
+                }
+                _ => panic!("Line should be a struct variant"),
             }
         }
         _ => panic!("unexpected type variant"),

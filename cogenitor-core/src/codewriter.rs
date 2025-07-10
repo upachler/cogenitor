@@ -155,7 +155,7 @@ fn test_write_code() -> anyhow::Result<()> {
 
 #[test]
 fn test_write_enum_code() -> anyhow::Result<()> {
-    use crate::codemodel::{EnumBuilder, Field, Module};
+    use crate::codemodel::{EnumBuilder, Module};
     use assert_tokenstreams_eq::assert_tokenstreams_eq;
 
     let mut cm = Codemodel::new();
@@ -169,23 +169,19 @@ fn test_write_enum_code() -> anyhow::Result<()> {
         .build()?;
     m.insert_enum(color_enum)?;
 
-    // Create an enum with tuple variants
+    // Create an enum with tuple variants and both struct variant approaches
     let shape_enum = EnumBuilder::new("Shape")
         .unit_variant("Circle")?
         .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
-        .struct_variant(
-            "Point",
-            vec![
-                Field {
-                    name: "x".to_string(),
-                    type_ref: cm.type_f64(),
-                },
-                Field {
-                    name: "y".to_string(),
-                    type_ref: cm.type_f64(),
-                },
-            ],
-        )?
+        // Closure-based field builder
+        .struct_variant("Point", |builder| {
+            builder.field("x", cm.type_f64())?.field("y", cm.type_f64())
+        })?
+        .struct_variant("Line", |builder| {
+            builder
+                .field("start", cm.type_f64())?
+                .field("end", cm.type_f64())
+        })?
         .build()?;
     m.insert_enum(shape_enum)?;
 
@@ -206,6 +202,7 @@ fn test_write_enum_code() -> anyhow::Result<()> {
             Circle,
             Rectangle(f64, f64),
             Point { x: f64, y: f64 },
+            Line { start: f64, end: f64 },
         }
     );
     assert_tokenstreams_eq!(&ts, &ts_reference);
