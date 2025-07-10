@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
-use crate::codemodel::{Codemodel, Indirection, NamedItem, TypeRef};
+use crate::codemodel::{Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef};
 
 // useful read on working with proc_macro2, quote and syn:
 // https://petanode.com/posts/rust-proc-macro/
@@ -42,6 +42,42 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
             quote!(pub struct #struct_name {
                 #(#struct_fields),*
             })
+        }
+        TypeRef::Enum(e) => {
+            let enum_name = format_ident!("{}", e.name());
+            let mut enum_variants = Vec::new();
+
+            for variant in e.variant_iter() {
+                let variant_name = format_ident!("{}", variant.name());
+                match variant.data() {
+                    EnumVariantData::Unit => {
+                        enum_variants.push(quote!(#variant_name));
+                    }
+                    EnumVariantData::Tuple(types) => {
+                        let mut variant_types = Vec::new();
+                        for t in types {
+                            let syn_type_ref = syn_type_name_of(t)?;
+                            variant_types.push(syn_type_ref);
+                        }
+                        enum_variants.push(quote!(#variant_name(#(#variant_types),*)));
+                    }
+                    EnumVariantData::Struct(fields) => {
+                        let mut variant_fields = Vec::new();
+                        for f in fields {
+                            let field_name = Ident::new(&f.name(), Span::call_site());
+                            let syn_type_ref = syn_type_name_of(f.type_())?;
+                            variant_fields.push(quote!(#field_name: #syn_type_ref));
+                        }
+                        enum_variants.push(quote!(#variant_name { #(#variant_fields),* }));
+                    }
+                }
+            }
+            quote!(
+                #[derive(Debug)]
+                pub enum #enum_name {
+                    #(#enum_variants),*
+                }
+            )
         }
         TypeRef::Alias(alias) => {
             let alias_name = Ident::new(&alias.name(), Span::call_site());
@@ -111,6 +147,65 @@ fn test_write_code() -> anyhow::Result<()> {
             pub name: String,
             pub other_names: Vec<String>,
             pub zab: u8,
+        }
+    );
+    assert_tokenstreams_eq!(&ts, &ts_reference);
+    Ok(())
+}
+
+#[test]
+fn test_write_enum_code() -> anyhow::Result<()> {
+    use crate::codemodel::{EnumBuilder, Field, Module};
+    use assert_tokenstreams_eq::assert_tokenstreams_eq;
+
+    let mut cm = Codemodel::new();
+    let mut m = Module::new("crate");
+
+    // Create a simple enum with unit variants
+    let color_enum = EnumBuilder::new("Color")
+        .unit_variant("Red")?
+        .unit_variant("Green")?
+        .unit_variant("Blue")?
+        .build()?;
+    m.insert_enum(color_enum)?;
+
+    // Create an enum with tuple variants
+    let shape_enum = EnumBuilder::new("Shape")
+        .unit_variant("Circle")?
+        .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
+        .struct_variant(
+            "Point",
+            vec![
+                Field {
+                    name: "x".to_string(),
+                    type_ref: cm.type_f64(),
+                },
+                Field {
+                    name: "y".to_string(),
+                    type_ref: cm.type_f64(),
+                },
+            ],
+        )?
+        .build()?;
+    m.insert_enum(shape_enum)?;
+
+    cm.insert_crate(m)?;
+
+    let ts = write_to_token_stream(&cm, "crate")?;
+    println!("{ts}");
+
+    let ts_reference = quote!(
+        #[derive(Debug)]
+        pub enum Color {
+            Red,
+            Green,
+            Blue,
+        }
+        #[derive(Debug)]
+        pub enum Shape {
+            Circle,
+            Rectangle(f64, f64),
+            Point { x: f64, y: f64 },
         }
     );
     assert_tokenstreams_eq!(&ts, &ts_reference);

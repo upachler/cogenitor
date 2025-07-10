@@ -136,6 +136,67 @@ pub enum StructBuilderError {
     DuplicateFieldName,
 }
 
+/// Represents the data associated with an enum variant
+#[derive(Debug)]
+pub enum EnumVariantData {
+    /// Unit variant (e.g., `Red`)
+    Unit,
+    /// Tuple variant (e.g., `Color(u8, u8, u8)`)
+    Tuple(Vec<TypeRef>),
+    /// Struct variant (e.g., `Point { x: i32, y: i32 }`)
+    Struct(Vec<Field>),
+}
+
+/// Represents a single variant of a Rust enum
+#[derive(Debug)]
+pub struct EnumVariant {
+    name: String,
+    data: EnumVariantData,
+}
+
+impl EnumVariant {
+    pub fn data(&self) -> &EnumVariantData {
+        &self.data
+    }
+}
+
+impl NamedItem for EnumVariant {
+    fn name(&self) -> Cow<str> {
+        Cow::Borrowed(&self.name)
+    }
+}
+
+/// Represents a Rust enum with its variants
+#[derive(Debug)]
+pub struct Enum {
+    name: String,
+    variant_list: Vec<EnumVariant>,
+}
+
+impl Enum {
+    pub fn variant_iter(&self) -> impl Iterator<Item = &EnumVariant> {
+        self.variant_list.iter()
+    }
+}
+
+impl NamedItem for Enum {
+    fn name(&self) -> Cow<str> {
+        Cow::Borrowed(&self.name)
+    }
+}
+
+/// Builder for constructing `Enum` instances
+pub struct EnumBuilder {
+    name: String,
+    variants: Vec<EnumVariant>,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum EnumBuilderError {
+    #[error("a variant with that name already exists")]
+    DuplicateVariantName,
+}
+
 impl StructBuilder {
     pub fn new(name: &str) -> Self {
         StructBuilder {
@@ -162,6 +223,66 @@ impl StructBuilder {
         Ok(Struct {
             name: self.name,
             field_list: self.fields,
+        })
+    }
+}
+
+impl EnumBuilder {
+    pub fn new(name: &str) -> Self {
+        EnumBuilder {
+            name: name.to_string(),
+            variants: Vec::new(),
+        }
+    }
+
+    pub fn unit_variant(mut self, name: &str) -> Result<Self, EnumBuilderError> {
+        if self.variants.iter().any(|v| v.name.eq(name)) {
+            return Err(EnumBuilderError::DuplicateVariantName);
+        }
+        let variant = EnumVariant {
+            name: name.to_string(),
+            data: EnumVariantData::Unit,
+        };
+        self.variants.push(variant);
+        Ok(self)
+    }
+
+    pub fn tuple_variant(
+        mut self,
+        name: &str,
+        types: Vec<TypeRef>,
+    ) -> Result<Self, EnumBuilderError> {
+        if self.variants.iter().any(|v| v.name.eq(name)) {
+            return Err(EnumBuilderError::DuplicateVariantName);
+        }
+        let variant = EnumVariant {
+            name: name.to_string(),
+            data: EnumVariantData::Tuple(types),
+        };
+        self.variants.push(variant);
+        Ok(self)
+    }
+
+    pub fn struct_variant(
+        mut self,
+        name: &str,
+        fields: Vec<Field>,
+    ) -> Result<Self, EnumBuilderError> {
+        if self.variants.iter().any(|v| v.name.eq(name)) {
+            return Err(EnumBuilderError::DuplicateVariantName);
+        }
+        let variant = EnumVariant {
+            name: name.to_string(),
+            data: EnumVariantData::Struct(fields),
+        };
+        self.variants.push(variant);
+        Ok(self)
+    }
+
+    pub fn build(self) -> Result<Enum, EnumBuilderError> {
+        Ok(Enum {
+            name: self.name,
+            variant_list: self.variants,
         })
     }
 }
@@ -235,6 +356,7 @@ pub enum TypeRef {
     /// type name must be looked up via CodeModel
     Indirection(Rc<RefCell<Indirection>>),
     Struct(Rc<Struct>),
+    Enum(Rc<Enum>),
     Builtin(Rc<Builtin>),
     Alias(Rc<Alias>),
     GenericInstance {
@@ -251,6 +373,7 @@ impl NamedItem for TypeRef {
                 Indirection::Resolved(type_ref) => Cow::Owned(type_ref.name().to_string()),
             },
             TypeRef::Struct(s) => s.name(),
+            TypeRef::Enum(e) => e.name(),
             TypeRef::Builtin(b) => b.name(),
             TypeRef::Alias(r) => r.name(),
             TypeRef::GenericInstance {
@@ -274,14 +397,20 @@ impl From<Struct> for TypeRef {
     }
 }
 
+impl From<Enum> for TypeRef {
+    fn from(value: Enum) -> Self {
+        Self::Enum(Rc::new(value))
+    }
+}
+
 pub trait NamedItem {
     fn name(&self) -> Cow<str>;
 }
 
 #[derive(Debug)]
 pub struct Field {
-    name: String,
-    type_ref: TypeRef,
+    pub name: String,
+    pub type_ref: TypeRef,
 }
 
 impl Field {
@@ -480,6 +609,29 @@ impl Module {
         Ok(struct_ref)
     }
 
+    pub fn insert_enum(&mut self, e: Enum) -> Result<TypeRef, CodeError> {
+        let enum_ref = TypeRef::from(e);
+        if let Some(TypeRef::Indirection(i)) =
+            self.type_namespace.find_item(enum_ref.name().as_ref())
+        {
+            // if the name collides with a stub, we simply replace that stub,
+            // otherwise it's a proper name collision
+            let is_stub = match i.borrow().deref() {
+                Indirection::Stub(_) => true,
+                _ => false,
+            };
+            if is_stub {
+                let replacement = Indirection::Resolved(enum_ref.clone());
+                i.replace(replacement);
+            } else {
+                return Err(CodeError::ItemAlreadyPresent);
+            }
+        } else {
+            self.type_namespace.insert_item(enum_ref.clone())?;
+        }
+        Ok(enum_ref)
+    }
+
     pub fn insert_type_stub(&mut self, name: &str) -> Result<TypeRef, CodeError> {
         self.type_namespace
             .insert_item(TypeRef::Indirection(Rc::new(RefCell::new(
@@ -583,6 +735,78 @@ fn test_buider() -> Result<(), anyhow::Error> {
         .expect("Type not found");
     match type_test {
         TypeRef::Struct(s) => assert_eq!(s.field_iter().count(), 2),
+        _ => panic!("unexpected type variant"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_enum_builder() -> Result<(), anyhow::Error> {
+    let mut cm = Codemodel::new();
+
+    let e = EnumBuilder::new("Color")
+        .unit_variant("Red")?
+        .unit_variant("Green")?
+        .unit_variant("Blue")?
+        .tuple_variant("Custom", vec![cm.type_u8(), cm.type_u8(), cm.type_u8()])?
+        .build()?;
+
+    let mut m = Module::new("crate");
+    m.insert_enum(e)?;
+    cm.insert_crate(m)?;
+
+    let type_color = cm
+        .find_type(&FQTN::from_str("crate::Color").unwrap())
+        .expect("Type not found");
+    match type_color {
+        TypeRef::Enum(e) => {
+            assert_eq!(e.variant_iter().count(), 4);
+
+            // Collect variants into a map for easier checking
+            let variants: std::collections::HashMap<String, &EnumVariant> = e
+                .variant_iter()
+                .map(|v| (v.name().to_string(), v))
+                .collect();
+
+            // Check Red variant (Unit)
+            let red = variants.get("Red").expect("Red variant not found");
+            match red.data() {
+                EnumVariantData::Unit => {}
+                _ => panic!("Red should be a unit variant"),
+            }
+
+            // Check Green variant (Unit)
+            let green = variants.get("Green").expect("Green variant not found");
+            match green.data() {
+                EnumVariantData::Unit => {}
+                _ => panic!("Green should be a unit variant"),
+            }
+
+            // Check Blue variant (Unit)
+            let blue = variants.get("Blue").expect("Blue variant not found");
+            match blue.data() {
+                EnumVariantData::Unit => {}
+                _ => panic!("Blue should be a unit variant"),
+            }
+
+            // Check Custom variant (Tuple with 3 u8 types)
+            let custom = variants.get("Custom").expect("Custom variant not found");
+            match custom.data() {
+                EnumVariantData::Tuple(types) => {
+                    assert_eq!(types.len(), 3);
+                    for type_ref in types {
+                        match type_ref {
+                            TypeRef::Builtin(builtin) => {
+                                assert_eq!(builtin.name(), "u8");
+                            }
+                            _ => panic!("Custom variant should contain u8 types"),
+                        }
+                    }
+                }
+                _ => panic!("Custom should be a tuple variant"),
+            }
+        }
         _ => panic!("unexpected type variant"),
     }
 
