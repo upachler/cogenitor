@@ -5,6 +5,7 @@ use std::{
 
 use fqtn::FQTN;
 use lazy_static::lazy_static;
+use proc_macro2::TokenStream;
 
 pub mod fqtn;
 
@@ -35,18 +36,12 @@ impl Codemodel {
     fn fill_std(&mut self) -> Result<&mut Self, CodeError> {
         let mut std = Module::new("std");
         let mut string = Module::new("string");
-        let string_struct = Struct {
-            name: "String".to_string(),
-            field_list: Default::default(),
-        };
+        let string_struct = StructBuilder::new("String").build().unwrap();
         string.insert_struct(string_struct)?;
         std.insert_module(string)?;
 
         let mut vec = Module::new("vec");
-        let vec_struct = Struct {
-            name: "Vec".to_owned(),
-            field_list: vec![],
-        };
+        let vec_struct = StructBuilder::new("Vec").build().unwrap();
         vec.insert_struct(vec_struct)?;
         std.insert_module(vec)?;
         self.insert_crate(std)?;
@@ -247,6 +242,7 @@ impl StructBuilder {
     pub fn build(self) -> Result<Struct, StructBuilderError> {
         Ok(Struct {
             name: self.name,
+            attribute_list: vec![],
             field_list: self.field_builder.build(),
         })
     }
@@ -460,6 +456,7 @@ impl NamedItem for Field {
 
 #[derive(Debug)]
 pub struct Struct {
+    attribute_list: Vec<Attr>,
     name: String,
     field_list: Vec<Field>,
 }
@@ -474,6 +471,12 @@ impl NamedItem for Struct {
     fn name(&self) -> Cow<str> {
         Cow::Borrowed(&self.name)
     }
+}
+
+#[derive(Debug)]
+pub struct Attr {
+    path: FQTN,
+    input: TokenStream,
 }
 
 #[derive(Debug)]
