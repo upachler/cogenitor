@@ -3,11 +3,9 @@ use std::{
     rc::Rc, str::FromStr,
 };
 
-use assert_tokenstreams_eq::assert_tokenstreams_eq;
 use fqtn::FQTN;
 use lazy_static::lazy_static;
 use proc_macro2::TokenStream;
-use quote::quote;
 
 use crate::codemodel::simplepath::SimplePath;
 
@@ -854,288 +852,297 @@ impl Scope for Module {
     }
 }
 
-#[test]
-fn test_crates_and_mods() -> Result<(), anyhow::Error> {
-    let mut cm = Codemodel::new();
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
 
-    let c = Module::new("crate");
-    let crate_ref = cm.insert_crate(c)?;
-    assert_eq!(
-        crate_ref,
-        cm.find_crate("crate").expect("'crate' not found")
-    );
+    use quote::quote;
 
-    Ok(())
-}
+    use crate::codemodel::*;
 
-#[test]
-fn test_stub() -> Result<(), anyhow::Error> {
-    let mut m = Module::new("crate");
+    #[test]
+    fn test_crates_and_mods() -> Result<(), anyhow::Error> {
+        let mut cm = Codemodel::new();
 
-    m.insert_type_stub("Foo")?;
+        let c = Module::new("crate");
+        let crate_ref = cm.insert_crate(c)?;
+        assert_eq!(
+            crate_ref,
+            cm.find_crate("crate").expect("'crate' not found")
+        );
 
-    assert!(m.find_type("Foo").is_none());
-
-    let s = StructBuilder::new("Foo").build()?;
-    m.insert_struct(s)?;
-    let foo_ref = m.find_type("Foo");
-    if let Some(TypeRef::Struct(s)) = foo_ref {
-        assert_eq!("Foo", s.name());
-        return Ok(());
-    } else {
-        panic!("cannot find requested type 'Foo'");
-    }
-}
-
-#[test]
-fn test_buider() -> Result<(), anyhow::Error> {
-    let mut cm = Codemodel::new();
-
-    let s = StructBuilder::new("Test")
-        .field("foo", cm.type_u8())
-        .unwrap()
-        .field(
-            "bar",
-            cm.find_type(&FQTN::from_str("std::string::String").unwrap())
-                .unwrap(),
-        )
-        .unwrap()
-        .build()?;
-    let mut m = Module::new("crate");
-    m.insert_struct(s)?;
-    cm.insert_crate(m)?;
-
-    let type_test = cm
-        .find_type(&FQTN::from_str("crate::Test").unwrap())
-        .expect("Type not found");
-    match type_test {
-        TypeRef::Struct(s) => assert_eq!(s.field_iter().count(), 2),
-        _ => panic!("unexpected type variant"),
+        Ok(())
     }
 
-    Ok(())
-}
+    #[test]
+    fn test_stub() -> Result<(), anyhow::Error> {
+        let mut m = Module::new("crate");
 
-#[test]
-fn test_attr_builder() -> Result<(), anyhow::Error> {
-    let cm = Codemodel::new();
+        m.insert_type_stub("Foo")?;
 
-    // Test struct with attributes
-    let s = StructBuilder::new("TestStruct")
-        .attr("derive")?
-        .attr_with_input("serde::serialize", TokenStream::new())?
-        .field("name", cm.type_string())?
-        .field("age", cm.type_u32())?
-        .build()?;
+        assert!(m.find_type("Foo").is_none());
 
-    assert_eq!(s.attribute_list.len(), 2);
-    assert_eq!(s.field_list.len(), 2);
+        let s = StructBuilder::new("Foo").build()?;
+        m.insert_struct(s)?;
+        let foo_ref = m.find_type("Foo");
+        if let Some(TypeRef::Struct(s)) = foo_ref {
+            assert_eq!("Foo", s.name());
+            return Ok(());
+        } else {
+            panic!("cannot find requested type 'Foo'");
+        }
+    }
 
-    // Test enum with attributes
-    let e = EnumBuilder::new("TestEnum")
-        .attr("derive")?
-        .attr_with_input("serde", TokenStream::new())?
-        .unit_variant("A")?
-        .tuple_variant("B", vec![cm.type_string()])?
-        .struct_variant("C", |builder| {
-            builder.field("x", cm.type_i32())?.field("y", cm.type_i32())
-        })?
-        .build()?;
+    #[test]
+    fn test_buider() -> Result<(), anyhow::Error> {
+        let mut cm = Codemodel::new();
 
-    assert_eq!(e.attribute_list.len(), 2);
-    assert_eq!(e.variant_list.len(), 3);
+        let s = StructBuilder::new("Test")
+            .field("foo", cm.type_u8())
+            .unwrap()
+            .field(
+                "bar",
+                cm.find_type(&FQTN::from_str("std::string::String").unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
+            .build()?;
+        let mut m = Module::new("crate");
+        m.insert_struct(s)?;
+        cm.insert_crate(m)?;
 
-    Ok(())
-}
+        let type_test = cm
+            .find_type(&FQTN::from_str("crate::Test").unwrap())
+            .expect("Type not found");
+        match type_test {
+            TypeRef::Struct(s) => assert_eq!(s.field_iter().count(), 2),
+            _ => panic!("unexpected type variant"),
+        }
 
-#[test]
-fn test_duplicate_attr_allowed() -> Result<(), anyhow::Error> {
-    // Test that duplicate attributes are allowed in struct
-    let s = StructBuilder::new("TestStruct")
-        .attr("derive")?
-        .attr("derive")? // This should work
-        .field("name", Codemodel::new().type_string())?
-        .build()?;
+        Ok(())
+    }
 
-    assert_eq!(s.attr_iter().count(), 2);
+    #[test]
+    fn test_attr_builder() -> Result<(), anyhow::Error> {
+        let cm = Codemodel::new();
 
-    // Test that duplicate attributes are allowed in enum
-    let e = EnumBuilder::new("TestEnum")
-        .attr("derive")?
-        .attr("derive")? // This should work
-        .unit_variant("A")?
-        .build()?;
+        // Test struct with attributes
+        let s = StructBuilder::new("TestStruct")
+            .attr("derive")?
+            .attr_with_input("serde::serialize", TokenStream::new())?
+            .field("name", cm.type_string())?
+            .field("age", cm.type_u32())?
+            .build()?;
 
-    assert_eq!(e.attr_iter().count(), 2);
+        assert_eq!(s.attribute_list.len(), 2);
+        assert_eq!(s.field_list.len(), 2);
 
-    Ok(())
-}
+        // Test enum with attributes
+        let e = EnumBuilder::new("TestEnum")
+            .attr("derive")?
+            .attr_with_input("serde", TokenStream::new())?
+            .unit_variant("A")?
+            .tuple_variant("B", vec![cm.type_string()])?
+            .struct_variant("C", |builder| {
+                builder.field("x", cm.type_i32())?.field("y", cm.type_i32())
+            })?
+            .build()?;
 
-#[test]
-fn test_comprehensive_attr_usage() -> Result<(), anyhow::Error> {
-    let cm = Codemodel::new();
+        assert_eq!(e.attribute_list.len(), 2);
+        assert_eq!(e.variant_list.len(), 3);
 
-    // Create a struct with multiple attributes
-    let person_struct = StructBuilder::new("Person")
-        .attr("serde::deserialize")?
-        .attr_with_input("derive", quote!((Debug)))?
-        .attr("repr")?
-        .field("name", cm.type_string())?
-        .field("age", cm.type_u32())?
-        .field("active", cm.type_bool())?
-        .build()?;
+        Ok(())
+    }
 
-    // Verify struct attributes
-    assert_eq!(person_struct.attr_iter().count(), 3);
-    let attr_names: Vec<String> = person_struct
-        .attr_iter()
-        .map(|a| a.path().to_string())
-        .collect();
-    assert!(attr_names.iter().any(|n| n == "derive"));
-    assert!(attr_names.iter().any(|n| n == "serde::deserialize"));
-    assert!(attr_names.iter().any(|n| n == "repr"));
+    #[test]
+    fn test_duplicate_attr_allowed() -> Result<(), anyhow::Error> {
+        // Test that duplicate attributes are allowed in struct
+        let s = StructBuilder::new("TestStruct")
+            .attr("derive")?
+            .attr("derive")? // This should work
+            .field("name", Codemodel::new().type_string())?
+            .build()?;
 
-    // Create an enum with attributes
-    let status_enum = EnumBuilder::new("Status")
-        .attr("serialize")?
-        .attr_with_input("derive", quote!((Default, serde::Deserialize)))?
-        .unit_variant("Active")?
-        .unit_variant("Inactive")?
-        .tuple_variant("Pending", vec![cm.type_string()])?
-        .struct_variant("Custom", |builder| {
-            builder
-                .field("code", cm.type_i32())?
-                .field("message", cm.type_string())
-        })?
-        .build()?;
+        assert_eq!(s.attr_iter().count(), 2);
 
-    // Verify enum attributes
-    assert_eq!(status_enum.attr_iter().count(), 2);
-    let enum_attr_names: Vec<String> = status_enum
-        .attr_iter()
-        .map(|a| a.path().to_string())
-        .collect();
-    assert!(enum_attr_names.contains(&"derive".to_string()));
-    assert!(enum_attr_names.contains(&"derive".to_string()));
-    assert_eq!(
-        status_enum.attr_iter().nth(1).unwrap().input().to_string(),
-        quote!((Default, serde::Deserialize)).to_string()
-    );
+        // Test that duplicate attributes are allowed in enum
+        let e = EnumBuilder::new("TestEnum")
+            .attr("derive")?
+            .attr("derive")? // This should work
+            .unit_variant("A")?
+            .build()?;
 
-    // Verify enum variants
-    assert_eq!(status_enum.variant_iter().count(), 4);
+        assert_eq!(e.attr_iter().count(), 2);
 
-    Ok(())
-}
+        Ok(())
+    }
 
-#[test]
-fn test_enum_builder() -> Result<(), anyhow::Error> {
-    let mut cm = Codemodel::new();
+    #[test]
+    fn test_comprehensive_attr_usage() -> Result<(), anyhow::Error> {
+        let cm = Codemodel::new();
 
-    let e = EnumBuilder::new("Shape")
-        .unit_variant("Circle")?
-        .unit_variant("Square")?
-        .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
-        // Test struct variant with closure-based field builder
-        .struct_variant("Point", |builder| {
-            builder.field("x", cm.type_f64())?.field("y", cm.type_f64())
-        })?
-        .struct_variant("Line", |builder| {
-            builder
-                .field("start_x", cm.type_f64())?
-                .field("start_y", cm.type_f64())?
-                .field("end_x", cm.type_f64())?
-                .field("end_y", cm.type_f64())
-        })?
-        .build()?;
+        // Create a struct with multiple attributes
+        let person_struct = StructBuilder::new("Person")
+            .attr("serde::deserialize")?
+            .attr_with_input("derive", quote!((Debug)))?
+            .attr("repr")?
+            .field("name", cm.type_string())?
+            .field("age", cm.type_u32())?
+            .field("active", cm.type_bool())?
+            .build()?;
 
-    let mut m = Module::new("crate");
-    m.insert_enum(e)?;
-    cm.insert_crate(m)?;
+        // Verify struct attributes
+        assert_eq!(person_struct.attr_iter().count(), 3);
+        let attr_names: Vec<String> = person_struct
+            .attr_iter()
+            .map(|a| a.path().to_string())
+            .collect();
+        assert!(attr_names.iter().any(|n| n == "derive"));
+        assert!(attr_names.iter().any(|n| n == "serde::deserialize"));
+        assert!(attr_names.iter().any(|n| n == "repr"));
 
-    let type_shape = cm
-        .find_type(&FQTN::from_str("crate::Shape").unwrap())
-        .expect("Type not found");
-    match type_shape {
-        TypeRef::Enum(e) => {
-            assert_eq!(e.variant_iter().count(), 5);
+        // Create an enum with attributes
+        let status_enum = EnumBuilder::new("Status")
+            .attr("serialize")?
+            .attr_with_input("derive", quote!((Default, serde::Deserialize)))?
+            .unit_variant("Active")?
+            .unit_variant("Inactive")?
+            .tuple_variant("Pending", vec![cm.type_string()])?
+            .struct_variant("Custom", |builder| {
+                builder
+                    .field("code", cm.type_i32())?
+                    .field("message", cm.type_string())
+            })?
+            .build()?;
 
-            // Collect variants into a map for easier checking
-            let variants: std::collections::HashMap<String, &EnumVariant> = e
-                .variant_iter()
-                .map(|v| (v.name().to_string(), v))
-                .collect();
+        // Verify enum attributes
+        assert_eq!(status_enum.attr_iter().count(), 2);
+        let enum_attr_names: Vec<String> = status_enum
+            .attr_iter()
+            .map(|a| a.path().to_string())
+            .collect();
+        assert!(enum_attr_names.contains(&"derive".to_string()));
+        assert!(enum_attr_names.contains(&"derive".to_string()));
+        assert_eq!(
+            status_enum.attr_iter().nth(1).unwrap().input().to_string(),
+            quote!((Default, serde::Deserialize)).to_string()
+        );
 
-            // Check Circle variant (Unit)
-            let circle = variants.get("Circle").expect("Circle variant not found");
-            match circle.data() {
-                EnumVariantData::Unit => {}
-                _ => panic!("Circle should be a unit variant"),
-            }
+        // Verify enum variants
+        assert_eq!(status_enum.variant_iter().count(), 4);
 
-            // Check Square variant (Unit)
-            let square = variants.get("Square").expect("Square variant not found");
-            match square.data() {
-                EnumVariantData::Unit => {}
-                _ => panic!("Square should be a unit variant"),
-            }
+        Ok(())
+    }
 
-            // Check Rectangle variant (Tuple with 2 f64 types)
-            let rectangle = variants
-                .get("Rectangle")
-                .expect("Rectangle variant not found");
-            match rectangle.data() {
-                EnumVariantData::Tuple(types) => {
-                    assert_eq!(types.len(), 2);
-                    for type_ref in types {
-                        match type_ref {
-                            TypeRef::Builtin(builtin) => {
-                                assert_eq!(builtin.name(), "f64");
+    #[test]
+    fn test_enum_builder() -> Result<(), anyhow::Error> {
+        let mut cm = Codemodel::new();
+
+        let e = EnumBuilder::new("Shape")
+            .unit_variant("Circle")?
+            .unit_variant("Square")?
+            .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
+            // Test struct variant with closure-based field builder
+            .struct_variant("Point", |builder| {
+                builder.field("x", cm.type_f64())?.field("y", cm.type_f64())
+            })?
+            .struct_variant("Line", |builder| {
+                builder
+                    .field("start_x", cm.type_f64())?
+                    .field("start_y", cm.type_f64())?
+                    .field("end_x", cm.type_f64())?
+                    .field("end_y", cm.type_f64())
+            })?
+            .build()?;
+
+        let mut m = Module::new("crate");
+        m.insert_enum(e)?;
+        cm.insert_crate(m)?;
+
+        let type_shape = cm
+            .find_type(&FQTN::from_str("crate::Shape").unwrap())
+            .expect("Type not found");
+        match type_shape {
+            TypeRef::Enum(e) => {
+                assert_eq!(e.variant_iter().count(), 5);
+
+                // Collect variants into a map for easier checking
+                let variants: std::collections::HashMap<String, &EnumVariant> = e
+                    .variant_iter()
+                    .map(|v| (v.name().to_string(), v))
+                    .collect();
+
+                // Check Circle variant (Unit)
+                let circle = variants.get("Circle").expect("Circle variant not found");
+                match circle.data() {
+                    EnumVariantData::Unit => {}
+                    _ => panic!("Circle should be a unit variant"),
+                }
+
+                // Check Square variant (Unit)
+                let square = variants.get("Square").expect("Square variant not found");
+                match square.data() {
+                    EnumVariantData::Unit => {}
+                    _ => panic!("Square should be a unit variant"),
+                }
+
+                // Check Rectangle variant (Tuple with 2 f64 types)
+                let rectangle = variants
+                    .get("Rectangle")
+                    .expect("Rectangle variant not found");
+                match rectangle.data() {
+                    EnumVariantData::Tuple(types) => {
+                        assert_eq!(types.len(), 2);
+                        for type_ref in types {
+                            match type_ref {
+                                TypeRef::Builtin(builtin) => {
+                                    assert_eq!(builtin.name(), "f64");
+                                }
+                                _ => panic!("Rectangle variant should contain f64 types"),
                             }
-                            _ => panic!("Rectangle variant should contain f64 types"),
                         }
                     }
+                    _ => panic!("Rectangle should be a tuple variant"),
                 }
-                _ => panic!("Rectangle should be a tuple variant"),
-            }
 
-            // Check Point variant (Struct with x, y fields)
-            let point = variants.get("Point").expect("Point variant not found");
-            match point.data() {
-                EnumVariantData::Struct(fields) => {
-                    assert_eq!(fields.len(), 2);
-                    let field_map: std::collections::HashMap<String, &Field> =
-                        fields.iter().map(|f| (f.name().to_string(), f)).collect();
+                // Check Point variant (Struct with x, y fields)
+                let point = variants.get("Point").expect("Point variant not found");
+                match point.data() {
+                    EnumVariantData::Struct(fields) => {
+                        assert_eq!(fields.len(), 2);
+                        let field_map: std::collections::HashMap<String, &Field> =
+                            fields.iter().map(|f| (f.name().to_string(), f)).collect();
 
-                    let x_field = field_map.get("x").expect("x field not found");
-                    assert_eq!(x_field.type_().name(), "f64");
+                        let x_field = field_map.get("x").expect("x field not found");
+                        assert_eq!(x_field.type_().name(), "f64");
 
-                    let y_field = field_map.get("y").expect("y field not found");
-                    assert_eq!(y_field.type_().name(), "f64");
-                }
-                _ => panic!("Point should be a struct variant"),
-            }
-
-            // Check Line variant (Struct with start_x, start_y, end_x, end_y fields)
-            let line = variants.get("Line").expect("Line variant not found");
-            match line.data() {
-                EnumVariantData::Struct(fields) => {
-                    assert_eq!(fields.len(), 4);
-                    let field_map: std::collections::HashMap<String, &Field> =
-                        fields.iter().map(|f| (f.name().to_string(), f)).collect();
-
-                    for field_name in ["start_x", "start_y", "end_x", "end_y"] {
-                        let field = field_map
-                            .get(field_name)
-                            .expect(&format!("{field_name} field not found"));
-                        assert_eq!(field.type_().name(), "f64");
+                        let y_field = field_map.get("y").expect("y field not found");
+                        assert_eq!(y_field.type_().name(), "f64");
                     }
+                    _ => panic!("Point should be a struct variant"),
                 }
-                _ => panic!("Line should be a struct variant"),
-            }
-        }
-        _ => panic!("unexpected type variant"),
-    }
 
-    Ok(())
+                // Check Line variant (Struct with start_x, start_y, end_x, end_y fields)
+                let line = variants.get("Line").expect("Line variant not found");
+                match line.data() {
+                    EnumVariantData::Struct(fields) => {
+                        assert_eq!(fields.len(), 4);
+                        let field_map: std::collections::HashMap<String, &Field> =
+                            fields.iter().map(|f| (f.name().to_string(), f)).collect();
+
+                        for field_name in ["start_x", "start_y", "end_x", "end_y"] {
+                            let field = field_map
+                                .get(field_name)
+                                .expect(&format!("{field_name} field not found"));
+                            assert_eq!(field.type_().name(), "f64");
+                        }
+                    }
+                    _ => panic!("Line should be a struct variant"),
+                }
+            }
+            _ => panic!("unexpected type variant"),
+        }
+
+        Ok(())
+    }
 }

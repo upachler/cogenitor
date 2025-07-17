@@ -181,11 +181,22 @@ fn test_write_struct_with_serde() -> anyhow::Result<()> {
         .field("bar", cm.type_bool())?
         .build()?;
 
+    m.insert_struct(foo_struct)?;
+
     cm.insert_crate(m)?;
 
     let ts = write_to_token_stream(&cm, "crate")?;
     println!("{ts}");
 
+    assert_tokenstreams_eq!(
+        &ts,
+        &quote!(
+            #[derive(serde::Deserialize)]
+            pub struct Foo {
+                pub bar: bool,
+            }
+        )
+    );
     Ok(())
 }
 
