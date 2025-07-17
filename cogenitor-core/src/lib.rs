@@ -148,6 +148,17 @@ fn parse_schema(
     match &kind {
         TypeKind::Struct => {
             let mut b = StructBuilder::new(name.as_ref().unwrap());
+            b = b
+                .attr_with_input(
+                    "derive",
+                    quote::quote!((
+                        ::std::fmt::Debug,
+                        ::serde::Serialize,
+                        ::serde::Deserialize,
+                        ::core::cmp::PartialEq
+                    )),
+                )
+                .unwrap();
             for (name, schema) in schema.properties() {
                 let rust_name = translate::property_to_rust_fieldname(&name);
                 let type_ref = type_ref_of(cm, mapping, &schema)?;
