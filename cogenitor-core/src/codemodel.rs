@@ -3,11 +3,16 @@ use std::{
     rc::Rc, str::FromStr,
 };
 
+use assert_tokenstreams_eq::assert_tokenstreams_eq;
 use fqtn::FQTN;
 use lazy_static::lazy_static;
 use proc_macro2::TokenStream;
+use quote::quote;
+
+use crate::codemodel::simplepath::SimplePath;
 
 pub mod fqtn;
+pub mod simplepath;
 
 pub trait Scope {
     fn find_type(&self, name: &str) -> Option<TypeRef>;
@@ -120,13 +125,44 @@ impl Codemodel {
     }
 }
 
+pub enum FieldListBuilderError {
+    DuplicateFieldName,
+}
+
+impl From<FieldListBuilderError> for StructBuilderError {
+    fn from(value: FieldListBuilderError) -> Self {
+        match value {
+            FieldListBuilderError::DuplicateFieldName => StructBuilderError::DuplicateFieldName,
+        }
+    }
+}
+
+impl From<FieldListBuilderError> for EnumBuilderError {
+    fn from(value: FieldListBuilderError) -> Self {
+        match value {
+            FieldListBuilderError::DuplicateFieldName => EnumBuilderError::DuplicateFieldName,
+        }
+    }
+}
+
 /// Builder for constructing field lists with duplicate field name checking.
 ///
 /// This is a shared utility used internally by both `StructBuilder` and
 /// `EnumBuilder` to provide consistent field building behavior
 /// and eliminate code duplication.
+#[derive(Debug)]
 pub struct FieldListBuilder {
     fields: Vec<Field>,
+}
+
+/// Builder for constructing attribute lists with duplicate attribute name checking.
+///
+/// This is a shared utility used internally by both `StructBuilder` and
+/// `EnumBuilder` to provide consistent attribute building behavior
+/// and eliminate code duplication.
+#[derive(Debug)]
+pub struct AttrListBuilder {
+    attrs: Vec<Attr>,
 }
 
 impl FieldListBuilder {
@@ -134,9 +170,9 @@ impl FieldListBuilder {
         FieldListBuilder { fields: Vec::new() }
     }
 
-    pub fn field(mut self, name: &str, type_ref: TypeRef) -> Result<Self, StructBuilderError> {
+    pub fn field(mut self, name: &str, type_ref: TypeRef) -> Result<Self, FieldListBuilderError> {
         if self.fields.iter().any(|f| f.name.eq(name)) {
-            return Err(StructBuilderError::DuplicateFieldName);
+            return Err(FieldListBuilderError::DuplicateFieldName);
         }
         let field = Field {
             name: name.to_string(),
@@ -151,15 +187,65 @@ impl FieldListBuilder {
     }
 }
 
+enum AttrListBuilderError {
+    AttrPathInvalid,
+}
+
+impl From<AttrListBuilderError> for StructBuilderError {
+    fn from(value: AttrListBuilderError) -> Self {
+        match value {
+            AttrListBuilderError::AttrPathInvalid => Self::AttrPathInvalid,
+        }
+    }
+}
+
+impl From<AttrListBuilderError> for EnumBuilderError {
+    fn from(value: AttrListBuilderError) -> Self {
+        match value {
+            AttrListBuilderError::AttrPathInvalid => Self::AttrPathInvalid,
+        }
+    }
+}
+
+impl AttrListBuilder {
+    fn new() -> Self {
+        AttrListBuilder { attrs: Vec::new() }
+    }
+
+    fn attr(self, item_path: &str) -> Result<Self, AttrListBuilderError> {
+        self.attr_with_input(item_path, TokenStream::new())
+    }
+
+    fn attr_with_input(
+        mut self,
+        item_path: &str,
+        input: TokenStream,
+    ) -> Result<Self, AttrListBuilderError> {
+        self.attrs.push(Attr {
+            path: SimplePath::new(item_path).map_err(|_| AttrListBuilderError::AttrPathInvalid)?,
+            input,
+        });
+        Ok(self)
+    }
+
+    pub fn build(self) -> Vec<Attr> {
+        self.attrs
+    }
+}
+
+#[derive(Debug)]
 pub struct StructBuilder {
     name: String,
     field_builder: FieldListBuilder,
+    attr_builder: AttrListBuilder,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum StructBuilderError {
     #[error("a field with that name already exists")]
     DuplicateFieldName,
+    #[error("the attribute item path specified is invalid")]
+    AttrPathInvalid,
 }
 
 /// Represents the data associated with an enum variant
@@ -197,11 +283,16 @@ impl NamedItem for EnumVariant {
 pub struct Enum {
     name: String,
     variant_list: Vec<EnumVariant>,
+    attribute_list: Vec<Attr>,
 }
 
 impl Enum {
     pub fn variant_iter(&self) -> impl Iterator<Item = &EnumVariant> {
         self.variant_list.iter()
+    }
+
+    pub fn attr_iter(&self) -> impl Iterator<Item = &Attr> {
+        self.attribute_list.iter()
     }
 }
 
@@ -212,9 +303,11 @@ impl NamedItem for Enum {
 }
 
 /// Builder for constructing `Enum` instances
+#[derive(Debug)]
 pub struct EnumBuilder {
     name: String,
     variants: Vec<EnumVariant>,
+    attr_builder: AttrListBuilder,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -223,6 +316,8 @@ pub enum EnumBuilderError {
     DuplicateVariantName,
     #[error("a field with that name already exists")]
     DuplicateFieldName,
+    #[error("the attribute item path specified is invalid")]
+    AttrPathInvalid,
 }
 
 impl StructBuilder {
@@ -230,6 +325,7 @@ impl StructBuilder {
         StructBuilder {
             name: name.to_string(),
             field_builder: FieldListBuilder::new(),
+            attr_builder: AttrListBuilder::new(),
         }
     }
 
@@ -239,10 +335,24 @@ impl StructBuilder {
         Ok(self)
     }
 
+    pub fn attr(mut self, name: &str) -> Result<Self, StructBuilderError> {
+        self.attr_builder = self.attr_builder.attr(name)?;
+        Ok(self)
+    }
+
+    pub fn attr_with_input(
+        mut self,
+        name: &str,
+        input: TokenStream,
+    ) -> Result<Self, StructBuilderError> {
+        self.attr_builder = self.attr_builder.attr_with_input(name, input)?;
+        Ok(self)
+    }
+
     pub fn build(self) -> Result<Struct, StructBuilderError> {
         Ok(Struct {
             name: self.name,
-            attribute_list: vec![],
+            attribute_list: self.attr_builder.build(),
             field_list: self.field_builder.build(),
         })
     }
@@ -253,6 +363,7 @@ impl EnumBuilder {
         EnumBuilder {
             name: name.to_string(),
             variants: Vec::new(),
+            attr_builder: AttrListBuilder::new(),
         }
     }
 
@@ -290,7 +401,7 @@ impl EnumBuilder {
         field_builder: F,
     ) -> Result<Self, EnumBuilderError>
     where
-        F: FnOnce(FieldListBuilder) -> Result<FieldListBuilder, StructBuilderError>,
+        F: FnOnce(FieldListBuilder) -> Result<FieldListBuilder, FieldListBuilderError>,
     {
         if self.variants.iter().any(|v| v.name.eq(name)) {
             return Err(EnumBuilderError::DuplicateVariantName);
@@ -298,9 +409,7 @@ impl EnumBuilder {
 
         let builder = FieldListBuilder::new();
 
-        let completed_builder = field_builder(builder).map_err(|e| match e {
-            StructBuilderError::DuplicateFieldName => EnumBuilderError::DuplicateFieldName,
-        })?;
+        let completed_builder = field_builder(builder)?;
         let variant = EnumVariant {
             name: name.to_string(),
             data: EnumVariantData::Struct(completed_builder.build()),
@@ -309,10 +418,25 @@ impl EnumBuilder {
         Ok(self)
     }
 
+    pub fn attr(mut self, name: &str) -> Result<Self, EnumBuilderError> {
+        self.attr_builder = self.attr_builder.attr(name)?;
+        Ok(self)
+    }
+
+    pub fn attr_with_input(
+        mut self,
+        name: &str,
+        input: TokenStream,
+    ) -> Result<Self, EnumBuilderError> {
+        self.attr_builder = self.attr_builder.attr_with_input(name, input)?;
+        Ok(self)
+    }
+
     pub fn build(self) -> Result<Enum, EnumBuilderError> {
         Ok(Enum {
             name: self.name,
             variant_list: self.variants,
+            attribute_list: self.attr_builder.build(),
         })
     }
 }
@@ -465,6 +589,10 @@ impl Struct {
     pub fn field_iter(&self) -> impl Iterator<Item = &Field> {
         self.field_list.iter()
     }
+
+    pub fn attr_iter(&self) -> impl Iterator<Item = &Attr> {
+        self.attribute_list.iter()
+    }
 }
 
 impl NamedItem for Struct {
@@ -475,8 +603,18 @@ impl NamedItem for Struct {
 
 #[derive(Debug)]
 pub struct Attr {
-    path: FQTN,
+    path: SimplePath,
     input: TokenStream,
+}
+
+impl Attr {
+    pub fn path(&self) -> &SimplePath {
+        &self.path
+    }
+
+    pub fn input(&self) -> &TokenStream {
+        &self.input
+    }
 }
 
 #[derive(Debug)]
@@ -774,6 +912,118 @@ fn test_buider() -> Result<(), anyhow::Error> {
         TypeRef::Struct(s) => assert_eq!(s.field_iter().count(), 2),
         _ => panic!("unexpected type variant"),
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_attr_builder() -> Result<(), anyhow::Error> {
+    let cm = Codemodel::new();
+
+    // Test struct with attributes
+    let s = StructBuilder::new("TestStruct")
+        .attr("derive")?
+        .attr_with_input("serde::serialize", TokenStream::new())?
+        .field("name", cm.type_string())?
+        .field("age", cm.type_u32())?
+        .build()?;
+
+    assert_eq!(s.attribute_list.len(), 2);
+    assert_eq!(s.field_list.len(), 2);
+
+    // Test enum with attributes
+    let e = EnumBuilder::new("TestEnum")
+        .attr("derive")?
+        .attr_with_input("serde", TokenStream::new())?
+        .unit_variant("A")?
+        .tuple_variant("B", vec![cm.type_string()])?
+        .struct_variant("C", |builder| {
+            builder.field("x", cm.type_i32())?.field("y", cm.type_i32())
+        })?
+        .build()?;
+
+    assert_eq!(e.attribute_list.len(), 2);
+    assert_eq!(e.variant_list.len(), 3);
+
+    Ok(())
+}
+
+#[test]
+fn test_duplicate_attr_allowed() -> Result<(), anyhow::Error> {
+    // Test that duplicate attributes are allowed in struct
+    let s = StructBuilder::new("TestStruct")
+        .attr("derive")?
+        .attr("derive")? // This should work
+        .field("name", Codemodel::new().type_string())?
+        .build()?;
+
+    assert_eq!(s.attr_iter().count(), 2);
+
+    // Test that duplicate attributes are allowed in enum
+    let e = EnumBuilder::new("TestEnum")
+        .attr("derive")?
+        .attr("derive")? // This should work
+        .unit_variant("A")?
+        .build()?;
+
+    assert_eq!(e.attr_iter().count(), 2);
+
+    Ok(())
+}
+
+#[test]
+fn test_comprehensive_attr_usage() -> Result<(), anyhow::Error> {
+    let cm = Codemodel::new();
+
+    // Create a struct with multiple attributes
+    let person_struct = StructBuilder::new("Person")
+        .attr("serde::deserialize")?
+        .attr_with_input("derive", quote!((Debug)))?
+        .attr("repr")?
+        .field("name", cm.type_string())?
+        .field("age", cm.type_u32())?
+        .field("active", cm.type_bool())?
+        .build()?;
+
+    // Verify struct attributes
+    assert_eq!(person_struct.attr_iter().count(), 3);
+    let attr_names: Vec<String> = person_struct
+        .attr_iter()
+        .map(|a| a.path().to_string())
+        .collect();
+    assert!(attr_names.iter().any(|n| n == "derive"));
+    assert!(attr_names.iter().any(|n| n == "serde::deserialize"));
+    assert!(attr_names.iter().any(|n| n == "repr"));
+
+    // Create an enum with attributes
+    let status_enum = EnumBuilder::new("Status")
+        .attr("serialize")?
+        .attr_with_input("derive", quote!((Default, serde::Deserialize)))?
+        .unit_variant("Active")?
+        .unit_variant("Inactive")?
+        .tuple_variant("Pending", vec![cm.type_string()])?
+        .struct_variant("Custom", |builder| {
+            builder
+                .field("code", cm.type_i32())?
+                .field("message", cm.type_string())
+        })?
+        .build()?;
+
+    // Verify enum attributes
+    assert_eq!(status_enum.attr_iter().count(), 2);
+    let enum_attr_names: Vec<String> = status_enum
+        .attr_iter()
+        .map(|a| a.path().to_string())
+        .collect();
+    assert!(enum_attr_names.contains(&"derive".to_string()));
+    assert!(enum_attr_names.contains(&"derive".to_string()));
+    assert_eq!(
+        status_enum.attr_iter().nth(1).unwrap().input().to_string(),
+        quote!((Default, serde::Deserialize)).to_string()
+    );
+
+    // Verify enum variants
+    assert_eq!(status_enum.variant_iter().count(), 4);
 
     Ok(())
 }

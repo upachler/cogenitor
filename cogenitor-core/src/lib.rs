@@ -5,7 +5,7 @@ use std::{collections::HashMap, io::Read, path::Path};
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
-mod codemodel;
+pub mod codemodel;
 mod codewriter;
 mod translate;
 mod types;

@@ -4,7 +4,7 @@ use anyhow::anyhow;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
-use crate::codemodel::{Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef};
+use crate::codemodel::{Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef};
 
 // useful read on working with proc_macro2, quote and syn:
 // https://petanode.com/posts/rust-proc-macro/
@@ -27,19 +27,32 @@ pub(crate) fn write_to_token_stream(
     Ok(ts)
 }
 
+fn tokenize_attrs<'a>(attr_iter: impl Iterator<Item = &'a Attr>) -> TokenStream {
+    let mut ts = TokenStream::new();
+    for attr in attr_iter {
+        let attr_name = syn::parse_str::<syn::Path>(attr.path().as_str()).unwrap();
+        let attr_input = attr.input();
+        ts.extend(quote!(#[#attr_name #attr_input]));
+    }
+    ts
+}
+
 fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
     let ts = match type_ref {
         TypeRef::Struct(s) => {
             let struct_name = format_ident!("{}", s.name());
             let mut struct_fields = Vec::new();
 
+            let attrs = tokenize_attrs(s.attr_iter());
             for f in s.field_iter() {
                 let field_name = Ident::new(&f.name(), Span::call_site());
                 let syn_type_ref = syn_type_name_of(f.type_())?;
                 let field_type: TokenStream = syn_type_ref.to_token_stream();
                 struct_fields.push(quote!(pub #field_name: #field_type));
             }
-            quote!(pub struct #struct_name {
+            quote!(
+                #attrs
+                pub struct #struct_name {
                 #(#struct_fields),*
             })
         }
@@ -72,8 +85,9 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                     }
                 }
             }
+            let attrs = tokenize_attrs(e.attr_iter());
             quote!(
-                #[derive(Debug)]
+                #attrs
                 pub enum #enum_name {
                     #(#enum_variants),*
                 }
@@ -154,6 +168,28 @@ fn test_write_code() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_write_struct_with_serde() -> anyhow::Result<()> {
+    use crate::codemodel::{Module, StructBuilder};
+    use assert_tokenstreams_eq::assert_tokenstreams_eq;
+
+    let mut cm = Codemodel::new();
+    let mut m = Module::new("crate");
+
+    // insert 'Foo' that also references 'Bar';
+    let foo_struct = StructBuilder::new("Foo")
+        .attr_with_input("derive", quote!((serde::Deserialize)))?
+        .field("bar", cm.type_bool())?
+        .build()?;
+
+    cm.insert_crate(m)?;
+
+    let ts = write_to_token_stream(&cm, "crate")?;
+    println!("{ts}");
+
+    Ok(())
+}
+
+#[test]
 fn test_write_enum_code() -> anyhow::Result<()> {
     use crate::codemodel::{EnumBuilder, Module};
     use assert_tokenstreams_eq::assert_tokenstreams_eq;
@@ -171,6 +207,7 @@ fn test_write_enum_code() -> anyhow::Result<()> {
 
     // Create an enum with tuple variants and both struct variant approaches
     let shape_enum = EnumBuilder::new("Shape")
+        .attr_with_input("derive", quote!((Debug)))?
         .unit_variant("Circle")?
         .tuple_variant("Rectangle", vec![cm.type_f64(), cm.type_f64()])?
         // Closure-based field builder
@@ -191,7 +228,6 @@ fn test_write_enum_code() -> anyhow::Result<()> {
     println!("{ts}");
 
     let ts_reference = quote!(
-        #[derive(Debug)]
         pub enum Color {
             Red,
             Green,

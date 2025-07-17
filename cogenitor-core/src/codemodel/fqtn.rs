@@ -1,37 +1,52 @@
 use std::str::FromStr;
 
-use lazy_static::*;
-use regex::Regex;
+use super::simplepath::SimplePath;
 
 /** Fully Qualified Type Name */
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
 pub struct FQTN {
-    crate_name: Box<str>,
-    module_path: Option<Box<str>>,
-    type_name: Box<str>,
+    path: SimplePath,
 }
 
 impl FQTN {
     pub fn crate_name(&self) -> &str {
-        &self.crate_name
+        self.path.iter().next().unwrap()
     }
+
     pub fn module_path(&self) -> Option<&str> {
-        self.module_path.as_ref().map(|b| b.as_ref())
-    }
-    pub fn module_iter(&self) -> impl Iterator<Item = &str> {
-        match &self.module_path() {
-            Some(p) => p.split("::"),
-            None => {
-                // there must be an easier way to do this
-                let mut empty = "".split("x");
-                empty.next().unwrap();
-                empty
-            }
+        let segments: Vec<&str> = self.path.iter().collect();
+        if segments.len() > 2 {
+            // We need to find the substring that represents the module path
+            let full_path = self.path.as_str();
+            let crate_name = segments[0];
+            let type_name = segments.last().unwrap();
+
+            // Find start position (after crate:: )
+            let start = crate_name.len() + 2;
+            // Find end position (before ::type)
+            let end = full_path.len() - type_name.len() - 2;
+
+            Some(&full_path[start..end])
+        } else {
+            None
         }
     }
-    pub fn type_name(&self) -> &str {
-        &self.type_name
+
+    pub fn module_iter(&self) -> impl Iterator<Item = &str> {
+        let segments: Vec<&str> = self.path.iter().collect();
+        if segments.len() > 2 {
+            let module_segments: Vec<&str> = segments[1..segments.len() - 1].to_vec();
+            module_segments.into_iter()
+        } else {
+            Vec::new().into_iter()
+        }
     }
+
+    pub fn type_name(&self) -> &str {
+        let segments: Vec<&str> = self.path.iter().collect();
+        segments.last().unwrap()
+    }
+
     pub fn builder() -> impl FQTNBuilderCrate {
         FQTNBuilder::default()
     }
@@ -39,31 +54,8 @@ impl FQTN {
 
 impl std::fmt::Display for FQTN {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.crate_name())?;
-        f.write_str("::")?;
-        if let Some(module_path) = self.module_path() {
-            f.write_str("::")?;
-            f.write_str(module_path)?;
-        }
-        f.write_str(self.type_name())?;
-        Ok(())
+        write!(f, "{}", self.path)
     }
-}
-
-lazy_static! {
-    static ref FQTN_REGEX: Regex = Regex::new(
-        r"(?x)
-        ^
-        ([a-zA-Z_][a-zA-Z0-9_]*)    # group 1: first identifier
-                                    # foo::bar::Item -> foo
-
-        (                           # group 2: remaining identifiers and separators
-                                    # foo::bar::Item -> ::bar::Item
-            (?:::(?:[a-zA-Z_][a-zA-Z0-9_]*))+
-        )
-        $"
-    )
-    .expect("error parsing regex");
 }
 
 fn is_keyword(s: &str) -> bool {
@@ -89,46 +81,27 @@ impl<'a> FromStr for FQTN {
     type Err = anyhow::Error;
 
     fn from_str(fqtn_candidate: &str) -> Result<Self, Self::Err> {
-        let captures = FQTN_REGEX.captures(fqtn_candidate).ok_or_else(|| {
+        // Parse as SimplePath first
+        let path = SimplePath::new(fqtn_candidate).map_err(|e| {
             anyhow::Error::msg(format!(
-                "'{fqtn_candidate}' is not a valid rust fully qualified type name"
+                "'{fqtn_candidate}' is not a valid rust fully qualified type name: {e}"
             ))
         })?;
 
-        let crate_name: Box<str> = captures.get(1).unwrap().as_str().to_string().into();
-        Self::check_is_no_keyword(&crate_name, fqtn_candidate)?;
+        // Validate that we have at least 2 segments (crate::type at minimum)
+        let segments: Vec<&str> = path.iter().collect();
+        if segments.len() < 2 {
+            return Err(anyhow::Error::msg(format!(
+                "'{fqtn_candidate}' is not a valid rust fully qualified type name"
+            )));
+        }
 
-        let mut mods_item: Vec<_> = captures
-            .get(2)
-            .unwrap()
-            .as_str()
-            .split_at(2)
-            .1 // strip '::' at start
-            .split("::")
-            .collect();
+        // Check that none of the segments are keywords
+        for segment in &segments {
+            Self::check_is_no_keyword(segment, fqtn_candidate)?;
+        }
 
-        let type_name: Box<str> = mods_item.remove(mods_item.len() - 1).to_string().into();
-        Self::check_is_no_keyword(&type_name, fqtn_candidate)?;
-
-        let module_path = if mods_item.is_empty() {
-            None
-        } else {
-            // check all module names if any of them is a Rust keyword
-            mods_item
-                .iter()
-                .map(|s| Self::check_is_no_keyword(s, fqtn_candidate))
-                .filter(|r| r.is_err())
-                .next()
-                .unwrap_or(Ok(()))?;
-            // join all module names together to form a module path string
-            Some(mods_item.join("::").into())
-        };
-
-        Ok(FQTN {
-            crate_name,
-            module_path,
-            type_name,
-        })
+        Ok(FQTN { path })
     }
 }
 
@@ -161,21 +134,22 @@ impl FQTNBuilderModOrTypeName for FQTNBuilder {
     }
 
     fn type_name(self, type_name: &str) -> FQTN {
-        let module_path = if self.modules.is_empty() {
-            None
-        } else {
-            Some(self.modules.join("::").to_string().into())
-        };
+        let mut path_str = self.crate_.unwrap();
+        for module in &self.modules {
+            path_str.push_str("::");
+            path_str.push_str(module);
+        }
+        path_str.push_str("::");
+        path_str.push_str(type_name);
+
         FQTN {
-            crate_name: self.crate_.unwrap().to_string().into(),
-            module_path,
-            type_name: type_name.to_string().into(),
+            path: SimplePath::new(&path_str).expect("Builder should produce valid SimplePath"),
         }
     }
 }
 
 #[test]
-pub fn test_fqtn_regex() {
+pub fn test_fqtn_parsing() {
     // Example usage
     let valid_input = vec![
         "std::string::String",
@@ -187,16 +161,13 @@ pub fn test_fqtn_regex() {
 
     for test in valid_input {
         assert!(
-            FQTN_REGEX.is_match(test),
-            "{test} does not match but is expected to"
+            FQTN::from_str(test).is_ok(),
+            "{test} should parse successfully"
         );
     }
 
     for test in invalid_input {
-        assert!(
-            !FQTN_REGEX.is_match(test),
-            "{test} matches but it shouldn't!"
-        );
+        assert!(FQTN::from_str(test).is_err(), "{test} should fail to parse");
     }
 }
 
