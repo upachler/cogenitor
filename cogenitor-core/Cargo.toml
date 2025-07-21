@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.98"
+http.workspace = true
 json = "0.12.4"
 lazy_static = "1.5.0"
 openapiv3 = "2.0.0"

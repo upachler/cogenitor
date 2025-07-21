@@ -9,6 +9,8 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
     fn from_reader(r: impl io::Read) -> anyhow::Result<impl Spec>;
 
     fn schemata_iter(&self) -> impl Iterator<Item = (String, Self::Schema)>;
+
+    fn path_iter(&self) -> impl Iterator<Item = (String, impl PathItem)>;
 }
 
 /**
@@ -100,4 +102,35 @@ pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq {
     see https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.9
     */
     fn items(&self) -> Option<Vec<impl Schema>>;
+}
+
+// https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-operation-object
+pub trait PathItem {
+    // see 'get', 'put', ... in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
+    fn operations_iter(&self) -> impl Iterator<Item = (http::Method, impl Operation)>;
+    // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
+    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)>;
+}
+
+// see https://spec.openapis.org/oas/v3.0.4.html#x4-7-10
+pub trait Operation {
+    // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
+    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)>;
+    fn operation_id(&self) -> Option<&str>;
+}
+
+/// https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-1-parameter-locations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterLocation {
+    Query,
+    Header,
+    Path,
+    Cookie,
+}
+
+/// see https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-parameter-object
+pub trait Parameter {
+    /// see https://spec.openapis.org/oas/v3.0.4.html#parameter-in
+    fn in_(&self) -> ParameterLocation;
+    fn name(&self) -> &str;
 }

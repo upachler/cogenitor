@@ -3,11 +3,12 @@ use std::io::BufReader;
 use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
+use http::Method;
 use openapiv3::{OpenAPI, ReferenceOr, Type};
 
 #[cfg(test)]
 use crate::types::Format;
-use crate::types::{BooleanOrSchema, Schema};
+use crate::types::{BooleanOrSchema, Operation, Parameter, ParameterLocation, PathItem, Schema};
 
 pub struct OAS30Spec {
     openapi: Rc<OpenAPI>,
@@ -427,6 +428,24 @@ impl crate::Spec for OAS30Spec {
                 .unwrap_or(0),
         }
     }
+
+    fn path_iter(&self) -> impl Iterator<Item = (String, impl PathItem)> {
+        let paths: Vec<(String, openapiv3::PathItem)> = self
+            .openapi
+            .paths
+            .paths
+            .iter()
+            .filter_map(|(path, path_item_ref)| {
+                if let ReferenceOr::Item(path_item) = path_item_ref {
+                    Some((path.clone(), path_item.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        PathIterator { paths, current: 0 }
+    }
 }
 
 struct SchemaIterator {
@@ -461,6 +480,236 @@ impl Iterator for SchemaIterator {
         );
         self.curr = self.curr + 1;
         Some(r)
+    }
+}
+
+// Path Iterator Implementation
+struct PathIterator {
+    paths: Vec<(String, openapiv3::PathItem)>,
+    current: usize,
+}
+
+impl Iterator for PathIterator {
+    type Item = (String, OAS30PathItem);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((path, path_item)) = self.paths.get(self.current) {
+            self.current += 1;
+            return Some((
+                path.clone(),
+                OAS30PathItem {
+                    path_item: path_item.clone(),
+                },
+            ));
+        }
+        None
+    }
+}
+
+// OAS30 PathItem Implementation
+pub struct OAS30PathItem {
+    path_item: openapiv3::PathItem,
+}
+
+impl PathItem for OAS30PathItem {
+    fn operations_iter(&self) -> impl Iterator<Item = (Method, impl Operation)> {
+        let mut operations = Vec::new();
+
+        if let Some(ref op) = self.path_item.get {
+            operations.push((
+                Method::GET,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.put {
+            operations.push((
+                Method::PUT,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.post {
+            operations.push((
+                Method::POST,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.delete {
+            operations.push((
+                Method::DELETE,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.options {
+            operations.push((
+                Method::OPTIONS,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.head {
+            operations.push((
+                Method::HEAD,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.patch {
+            operations.push((
+                Method::PATCH,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+        if let Some(ref op) = self.path_item.trace {
+            operations.push((
+                Method::TRACE,
+                OAS30Operation {
+                    operation: op.clone(),
+                },
+            ));
+        }
+
+        operations.into_iter()
+    }
+
+    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+        let mut params = Vec::new();
+        for param_ref in &self.path_item.parameters {
+            if let ReferenceOr::Item(param) = param_ref {
+                match param {
+                    openapiv3::Parameter::Query { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Query,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Header { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Header,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Path { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Path,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Cookie { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Cookie,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        params.into_iter()
+    }
+}
+
+// OAS30 Operation Implementation
+pub struct OAS30Operation {
+    operation: openapiv3::Operation,
+}
+
+impl Operation for OAS30Operation {
+    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+        let mut params = Vec::new();
+        for param_ref in &self.operation.parameters {
+            if let ReferenceOr::Item(param) = param_ref {
+                match param {
+                    openapiv3::Parameter::Query { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Query,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Header { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Header,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Path { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Path,
+                            },
+                        ));
+                    }
+                    openapiv3::Parameter::Cookie { parameter_data, .. } => {
+                        let name = parameter_data.name.clone();
+                        params.push((
+                            name.clone(),
+                            OAS30Parameter {
+                                param_name: name,
+                                location: ParameterLocation::Cookie,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        params.into_iter()
+    }
+
+    fn operation_id(&self) -> Option<&str> {
+        self.operation.operation_id.as_deref()
+    }
+}
+
+// OAS30 Parameter Implementation
+pub struct OAS30Parameter {
+    param_name: String,
+    location: ParameterLocation,
+}
+
+impl Parameter for OAS30Parameter {
+    fn in_(&self) -> ParameterLocation {
+        self.location
+    }
+
+    fn name(&self) -> &str {
+        &self.param_name
     }
 }
 
@@ -547,4 +796,181 @@ fn type_of(s: &impl Schema) -> Option<crate::types::Type> {
     } else {
         None
     }
+}
+
+#[cfg(test)]
+#[test]
+fn test_simple_paths() {
+    use crate::types::Spec;
+    use http::Method;
+
+    let oas = r"
+openapi: 3.0.0
+info:
+    title: Test simple paths
+    version: v1
+paths:
+    '/foo':
+        description: get and put a 'foo'
+        get:
+            responses:
+                200:
+                    description: 'a simple response'
+                    content:
+                        application/json:
+                            schema:
+                                type: string
+        put:
+            requestBody:
+              content:
+                application/json:
+                  schema:
+                    type: string
+            responses:
+                204:
+                    description: 'a simple response'
+";
+    println!("parsing {oas}");
+    let spec = OAS30Spec::from_str(oas).unwrap();
+
+    // Test path_iter() implementation - should return exactly one path
+    let paths: Vec<_> = spec.path_iter().collect();
+    assert_eq!(paths.len(), 1);
+
+    // Verify the path name is correctly parsed
+    let (path_name, path_item) = &paths[0];
+    assert_eq!(path_name, "/foo");
+
+    // Test operations_iter() - should return GET and PUT operations
+    let operations: Vec<_> = path_item.operations_iter().collect();
+    assert_eq!(operations.len(), 2);
+
+    // Verify GET operation is present and correctly parsed
+    let get_op = operations.iter().find(|(method, _)| *method == Method::GET);
+    assert!(get_op.is_some(), "GET operation should be present");
+
+    let (_, get_operation) = get_op.unwrap();
+    assert_eq!(get_operation.operation_id(), None);
+
+    // Verify PUT operation is present and correctly parsed
+    let put_op = operations.iter().find(|(method, _)| *method == Method::PUT);
+    assert!(put_op.is_some(), "PUT operation should be present");
+
+    let (_, put_operation) = put_op.unwrap();
+    assert_eq!(put_operation.operation_id(), None);
+
+    // Test parameters() at path level - should be empty for this simple case
+    let path_params: Vec<_> = path_item.parameters().collect();
+    assert_eq!(path_params.len(), 0, "Path should have no parameters");
+
+    // Test parameters() at operation level - should be empty for this simple case
+    let get_params: Vec<_> = get_operation.parameters().collect();
+    assert_eq!(
+        get_params.len(),
+        0,
+        "GET operation should have no parameters"
+    );
+
+    let put_params: Vec<_> = put_operation.parameters().collect();
+    assert_eq!(
+        put_params.len(),
+        0,
+        "PUT operation should have no parameters"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn test_path_parameters() {
+    use crate::types::{ParameterLocation, Spec};
+    use http::Method;
+
+    let oas = r"
+openapi: 3.0.0
+info:
+    title: Test simple paths
+    version: v1
+paths:
+    '/bars/{bar_name}':
+        description: access bars
+        parameters:
+            -   in: path
+                name: bar_name
+                schema:
+                    type: string
+                required: true
+        get:
+            parameters:
+                -   name: with_foo
+                    in: query
+                    schema:
+                        type: boolean
+            responses:
+                200:
+                    description: 'a bar'
+                    content:
+                        application/json:
+                            schema:
+                                type: string
+                404:
+                    description: 'bar was not found'
+components:
+    schemas:
+        Bar:
+            type: object
+            properties:
+                name:
+                    type: string
+                associated_foo:
+                    type: string
+            required:
+                -   name
+";
+    println!("parsing {oas}");
+    let spec = OAS30Spec::from_str(oas).unwrap();
+
+    // Test path_iter() implementation - should return exactly one parameterized path
+    let paths: Vec<_> = spec.path_iter().collect();
+    assert_eq!(paths.len(), 1);
+
+    // Verify the parameterized path name is correctly parsed (includes {bar_name})
+    let (path_name, path_item) = &paths[0];
+    assert_eq!(path_name, "/bars/{bar_name}");
+
+    // Test path-level parameters - should have the bar_name path parameter
+    // This tests parameter extraction from the path item's parameters array
+    let path_params: Vec<_> = path_item.parameters().collect();
+    assert_eq!(path_params.len(), 1, "Path should have one parameter");
+
+    // Verify path parameter properties: name and location
+    let (param_name, param) = &path_params[0];
+    assert_eq!(param_name, "bar_name");
+    assert_eq!(param.name(), "bar_name");
+    assert_eq!(param.in_(), ParameterLocation::Path);
+
+    // Test operations_iter() - should return GET operation with its own parameters
+    let operations: Vec<_> = path_item.operations_iter().collect();
+    assert_eq!(operations.len(), 1);
+
+    // Verify GET operation is present and correctly parsed
+    let get_op = operations.iter().find(|(method, _)| *method == Method::GET);
+    assert!(get_op.is_some(), "GET operation should be present");
+
+    let (_, get_operation) = get_op.unwrap();
+    assert_eq!(get_operation.operation_id(), None);
+
+    // Test operation-level parameters - should have the with_foo query parameter
+    // This tests parameter extraction from the operation's parameters array
+    let get_params: Vec<_> = get_operation.parameters().collect();
+    assert_eq!(
+        get_params.len(),
+        1,
+        "GET operation should have one parameter"
+    );
+
+    // Verify operation parameter properties: name and location (query vs path)
+    let (param_name, param) = &get_params[0];
+    assert_eq!(param_name, "with_foo");
+    assert_eq!(param.name(), "with_foo");
+    assert_eq!(param.in_(), ParameterLocation::Query);
 }
