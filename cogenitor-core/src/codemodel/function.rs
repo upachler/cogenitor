@@ -5,11 +5,16 @@ use crate::codemodel::{NamedItem, TypeRef};
 pub struct Function {
     name: String,
     function_params: Vec<FunctionParam>,
+    return_type: TypeRef,
 }
 
 impl Function {
     pub fn function_params_iter(&self) -> impl Iterator<Item = &FunctionParam> {
         self.function_params.iter()
+    }
+
+    pub fn return_type(&self) -> &TypeRef {
+        &self.return_type
     }
 }
 
@@ -27,13 +32,15 @@ pub struct FunctionParam {
 pub struct FunctionBuilder {
     name: String,
     function_params: Vec<FunctionParam>,
+    return_type: TypeRef,
 }
 
 impl FunctionBuilder {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, return_type: TypeRef) -> Self {
         Self {
             name,
             function_params: Default::default(),
+            return_type,
         }
     }
 
@@ -46,6 +53,7 @@ impl FunctionBuilder {
         Function {
             name: self.name,
             function_params: self.function_params,
+            return_type: self.return_type,
         }
     }
 }

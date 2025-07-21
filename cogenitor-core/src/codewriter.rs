@@ -4,7 +4,10 @@ use anyhow::anyhow;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
-use crate::codemodel::{Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef};
+use crate::codemodel::{
+    Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef, function::Function,
+    implementation::Implementation,
+};
 
 // useful read on working with proc_macro2, quote and syn:
 // https://petanode.com/posts/rust-proc-macro/
@@ -22,8 +25,14 @@ pub(crate) fn write_to_token_stream(
         type_decls.push(write_type_decl(t)?);
     }
 
+    let mut impl_decls = Vec::new();
+    for impl_block in mod_.implementations_iter() {
+        impl_decls.push(write_implementation(impl_block)?);
+    }
+
     let mut ts = TokenStream::new();
     ts.extend(type_decls);
+    ts.extend(impl_decls);
     Ok(ts)
 }
 
@@ -111,6 +120,46 @@ fn syn_type_name_of(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
     let syn_type = syn::parse_str::<syn::Type>(&type_ref.name())?;
     let ts = syn_type.to_token_stream();
     Ok(ts)
+}
+
+fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStream> {
+    match impl_block {
+        Implementation::InherentImpl {
+            implementing_type,
+            associated_functions,
+        } => {
+            let type_name = syn_type_name_of(implementing_type)?;
+            let mut function_tokens = Vec::new();
+
+            for func in associated_functions {
+                function_tokens.push(write_function(func)?);
+            }
+
+            Ok(quote! {
+                impl #type_name {
+                    #(#function_tokens)*
+                }
+            })
+        }
+    }
+}
+
+fn write_function(func: &Function) -> anyhow::Result<TokenStream> {
+    let func_name = format_ident!("{}", func.name());
+    let return_type = syn_type_name_of(func.return_type())?;
+
+    let mut params = Vec::new();
+    for param in func.function_params_iter() {
+        let param_name = format_ident!("{}", param.name);
+        let param_type = syn_type_name_of(&param.type_)?;
+        params.push(quote!(#param_name: #param_type));
+    }
+
+    Ok(quote! {
+        pub fn #func_name(#(#params),*) -> #return_type {
+            todo!()
+        }
+    })
 }
 
 #[test]
@@ -250,6 +299,102 @@ fn test_write_enum_code() -> anyhow::Result<()> {
             Rectangle(f64, f64),
             Point { x: f64, y: f64 },
             Line { start: f64, end: f64 },
+        }
+    );
+    assert_tokenstreams_eq!(&ts, &ts_reference);
+    Ok(())
+}
+
+#[test]
+fn test_write_implementation() -> anyhow::Result<()> {
+    use crate::codemodel::{
+        Module, StructBuilder, function::FunctionBuilder, implementation::ImplementationBuilder,
+    };
+    use assert_tokenstreams_eq::assert_tokenstreams_eq;
+
+    let mut cm = Codemodel::new();
+    let mut m = Module::new("crate");
+
+    // Create multiple structs
+    let user_struct = StructBuilder::new("User")
+        .field("id", cm.type_u32())?
+        .field("name", cm.type_string())?
+        .field("email", cm.type_string())?
+        .build()?;
+    let user_ref = m.insert_struct(user_struct)?;
+
+    let post_struct = StructBuilder::new("Post")
+        .field("id", cm.type_u32())?
+        .field("title", cm.type_string())?
+        .field("author_id", cm.type_u32())?
+        .build()?;
+    let post_ref = m.insert_struct(post_struct)?;
+
+    // Create implementations for User
+    let user_new_fn = FunctionBuilder::new("new".to_string(), user_ref.clone())
+        .param("id".to_string(), cm.type_u32())
+        .param("name".to_string(), cm.type_string())
+        .param("email".to_string(), cm.type_string())
+        .build();
+
+    let user_get_id_fn = FunctionBuilder::new("get_id".to_string(), cm.type_u32()).build();
+
+    let user_impl = ImplementationBuilder::new_inherent(user_ref.clone())
+        .function(user_new_fn)
+        .function(user_get_id_fn)
+        .build();
+
+    // Create implementations for Post
+    let post_new_fn = FunctionBuilder::new("new".to_string(), post_ref.clone())
+        .param("id".to_string(), cm.type_u32())
+        .param("title".to_string(), cm.type_string())
+        .param("author_id".to_string(), cm.type_u32())
+        .build();
+
+    let post_get_author_fn = FunctionBuilder::new("get_author".to_string(), user_ref.clone())
+        .param("users".to_string(), cm.type_vec())
+        .build();
+
+    let post_impl = ImplementationBuilder::new_inherent(post_ref.clone())
+        .function(post_new_fn)
+        .function(post_get_author_fn)
+        .build();
+
+    // Insert implementations
+    m.insert_implementation(user_impl)?;
+    m.insert_implementation(post_impl)?;
+
+    cm.insert_crate(m)?;
+
+    let ts = write_to_token_stream(&cm, "crate")?;
+    println!("{ts}");
+
+    let ts_reference = quote!(
+        pub struct User {
+            pub id: u32,
+            pub name: String,
+            pub email: String,
+        }
+        pub struct Post {
+            pub id: u32,
+            pub title: String,
+            pub author_id: u32,
+        }
+        impl User {
+            pub fn new(id: u32, name: String, email: String) -> User {
+                todo!()
+            }
+            pub fn get_id() -> u32 {
+                todo!()
+            }
+        }
+        impl Post {
+            pub fn new(id: u32, title: String, author_id: u32) -> Post {
+                todo!()
+            }
+            pub fn get_author(users: Vec) -> User {
+                todo!()
+            }
         }
     );
     assert_tokenstreams_eq!(&ts, &ts_reference);

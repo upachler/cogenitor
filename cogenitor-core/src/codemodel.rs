@@ -688,6 +688,7 @@ pub struct Module {
     name: String,
     type_namespace: Namespace<TypeRef>,
     module_namespace: Namespace<ModuleRef>,
+    implementations: Vec<Implementation>,
 }
 
 impl std::fmt::Debug for Module {
@@ -750,6 +751,7 @@ impl Module {
             name: name.to_string(),
             module_namespace: Default::default(),
             type_namespace: Default::default(),
+            implementations: Vec::new(),
         }
     }
 
@@ -761,8 +763,13 @@ impl Module {
         self.module_namespace.item_list.iter()
     }
 
-    pub fn insert_implementation(&mut self, i: Implementation) {
-        todo!("function for adding a struct/trait implementation");
+    pub fn insert_implementation(&mut self, i: Implementation) -> Result<(), CodeError> {
+        self.implementations.push(i);
+        Ok(())
+    }
+
+    pub fn implementations_iter(&self) -> impl Iterator<Item = &Implementation> {
+        self.implementations.iter()
     }
 
     pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
@@ -1147,6 +1154,90 @@ mod tests {
                 }
             }
             _ => panic!("unexpected type variant"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_implementation() -> Result<(), anyhow::Error> {
+        use crate::codemodel::{
+            function::FunctionBuilder,
+            implementation::{Implementation, ImplementationBuilder},
+        };
+
+        let cm = Codemodel::new();
+        let mut m = Module::new("crate");
+
+        // Create a struct to implement for
+        let test_struct = StructBuilder::new("TestStruct").build()?;
+        let struct_ref = m.insert_struct(test_struct)?;
+
+        // Create multiple functions with different signatures
+        let new_fn = FunctionBuilder::new("new".to_string(), struct_ref.clone())
+            .param("value".to_string(), cm.type_i32())
+            .param("flag".to_string(), cm.type_bool())
+            .build();
+        let default_fn = FunctionBuilder::new("default".to_string(), struct_ref.clone()).build();
+        let clone_fn = FunctionBuilder::new("clone".to_string(), struct_ref.clone())
+            .param("src".to_string(), struct_ref.clone())
+            .build();
+
+        // Create implementation with multiple functions
+        let implementation = ImplementationBuilder::new_inherent(struct_ref.clone())
+            .function(new_fn)
+            .function(default_fn)
+            .function(clone_fn)
+            .build();
+
+        // Insert the implementation
+        m.insert_implementation(implementation)?;
+
+        // Verify the implementation was stored with all functions
+        assert_eq!(m.implementations_iter().count(), 1);
+
+        let stored_impl = m.implementations_iter().next().unwrap();
+        match stored_impl {
+            Implementation::InherentImpl {
+                implementing_type,
+                associated_functions,
+            } => {
+                assert_eq!(implementing_type.name(), "TestStruct");
+                assert_eq!(associated_functions.len(), 3);
+
+                // Check each function in detail
+                let functions: std::collections::HashMap<
+                    String,
+                    &crate::codemodel::function::Function,
+                > = associated_functions
+                    .iter()
+                    .map(|f| (f.name().to_string(), f))
+                    .collect();
+
+                // Check 'new' function
+                let new_func = functions.get("new").unwrap();
+                assert_eq!(new_func.return_type().name(), "TestStruct");
+                let new_params: Vec<_> = new_func.function_params_iter().collect();
+                assert_eq!(new_params.len(), 2);
+                assert_eq!(new_params[0].name, "value");
+                assert_eq!(new_params[0].type_.name(), "i32");
+                assert_eq!(new_params[1].name, "flag");
+                assert_eq!(new_params[1].type_.name(), "bool");
+
+                // Check 'default' function
+                let default_func = functions.get("default").unwrap();
+                assert_eq!(default_func.return_type().name(), "TestStruct");
+                let default_params: Vec<_> = default_func.function_params_iter().collect();
+                assert_eq!(default_params.len(), 0);
+
+                // Check 'clone' function
+                let clone_func = functions.get("clone").unwrap();
+                assert_eq!(clone_func.return_type().name(), "TestStruct");
+                let clone_params: Vec<_> = clone_func.function_params_iter().collect();
+                assert_eq!(clone_params.len(), 1);
+                assert_eq!(clone_params[0].name, "src");
+                assert_eq!(clone_params[0].type_.name(), "TestStruct");
+            }
         }
 
         Ok(())
