@@ -511,127 +511,80 @@ pub struct OAS30PathItem {
     path_item: openapiv3::PathItem,
 }
 
+fn extract_operation(
+    operations: &mut Vec<(Method, OAS30Operation)>,
+    method: http::Method,
+    opt_op: &Option<openapiv3::Operation>,
+) {
+    if let Some(op) = opt_op {
+        operations.push((
+            method,
+            OAS30Operation {
+                operation: op.clone(),
+            },
+        ));
+    }
+}
+
+fn extract_parameter(
+    parameters: &mut Vec<(String, OAS30Parameter)>,
+    location: ParameterLocation,
+    data: &openapiv3::ParameterData,
+) {
+    let param_name = data.name.clone();
+    parameters.push((
+        param_name.clone(),
+        OAS30Parameter {
+            param_name,
+            location,
+        },
+    ));
+}
+
+fn to_parameters_iter(
+    oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,
+) -> impl Iterator<Item = (String, impl Parameter)> {
+    let mut params = Vec::new();
+    for param_ref in oas30_parameters {
+        match param_ref {
+            ReferenceOr::Item(param) => match param {
+                openapiv3::Parameter::Query { parameter_data, .. } => {
+                    extract_parameter(&mut params, ParameterLocation::Query, parameter_data)
+                }
+                openapiv3::Parameter::Header { parameter_data, .. } => {
+                    extract_parameter(&mut params, ParameterLocation::Header, parameter_data)
+                }
+                openapiv3::Parameter::Path { parameter_data, .. } => {
+                    extract_parameter(&mut params, ParameterLocation::Path, parameter_data)
+                }
+                openapiv3::Parameter::Cookie { parameter_data, .. } => {
+                    extract_parameter(&mut params, ParameterLocation::Cookie, parameter_data)
+                }
+            },
+            _ => (),
+        }
+    }
+    params.into_iter()
+}
+
 impl PathItem for OAS30PathItem {
     fn operations_iter(&self) -> impl Iterator<Item = (Method, impl Operation)> {
         let mut operations = Vec::new();
 
-        if let Some(ref op) = self.path_item.get {
-            operations.push((
-                Method::GET,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.put {
-            operations.push((
-                Method::PUT,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.post {
-            operations.push((
-                Method::POST,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.delete {
-            operations.push((
-                Method::DELETE,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.options {
-            operations.push((
-                Method::OPTIONS,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.head {
-            operations.push((
-                Method::HEAD,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.patch {
-            operations.push((
-                Method::PATCH,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
-        if let Some(ref op) = self.path_item.trace {
-            operations.push((
-                Method::TRACE,
-                OAS30Operation {
-                    operation: op.clone(),
-                },
-            ));
-        }
+        extract_operation(&mut operations, Method::GET, &self.path_item.get);
+        extract_operation(&mut operations, Method::PUT, &self.path_item.put);
+        extract_operation(&mut operations, Method::POST, &self.path_item.post);
+        extract_operation(&mut operations, Method::DELETE, &self.path_item.delete);
+        extract_operation(&mut operations, Method::OPTIONS, &self.path_item.options);
+        extract_operation(&mut operations, Method::HEAD, &self.path_item.head);
+        extract_operation(&mut operations, Method::PATCH, &self.path_item.patch);
+        extract_operation(&mut operations, Method::TRACE, &self.path_item.trace);
 
         operations.into_iter()
     }
 
     fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
-        let mut params = Vec::new();
-        for param_ref in &self.path_item.parameters {
-            if let ReferenceOr::Item(param) = param_ref {
-                match param {
-                    openapiv3::Parameter::Query { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Query,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Header { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Header,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Path { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Path,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Cookie { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Cookie,
-                            },
-                        ));
-                    }
-                }
-            }
-        }
-        params.into_iter()
+        to_parameters_iter(&self.path_item.parameters)
     }
 }
 
@@ -642,54 +595,7 @@ pub struct OAS30Operation {
 
 impl Operation for OAS30Operation {
     fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
-        let mut params = Vec::new();
-        for param_ref in &self.operation.parameters {
-            if let ReferenceOr::Item(param) = param_ref {
-                match param {
-                    openapiv3::Parameter::Query { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Query,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Header { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Header,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Path { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Path,
-                            },
-                        ));
-                    }
-                    openapiv3::Parameter::Cookie { parameter_data, .. } => {
-                        let name = parameter_data.name.clone();
-                        params.push((
-                            name.clone(),
-                            OAS30Parameter {
-                                param_name: name,
-                                location: ParameterLocation::Cookie,
-                            },
-                        ));
-                    }
-                }
-            }
-        }
-        params.into_iter()
+        to_parameters_iter(&self.operation.parameters)
     }
 
     fn operation_id(&self) -> Option<&str> {
