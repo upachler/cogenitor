@@ -7,9 +7,11 @@ use fqtn::FQTN;
 use lazy_static::lazy_static;
 use proc_macro2::TokenStream;
 
-use crate::codemodel::simplepath::SimplePath;
+use crate::codemodel::{implementation::Implementation, simplepath::SimplePath};
 
 pub mod fqtn;
+pub mod function;
+pub mod implementation;
 pub mod simplepath;
 
 pub trait Scope {
@@ -757,6 +759,10 @@ impl Module {
 
     pub fn mod_iter(&self) -> impl Iterator<Item = &ModuleRef> {
         self.module_namespace.item_list.iter()
+    }
+
+    pub fn insert_implementation(&mut self, i: Implementation) {
+        todo!("function for adding a struct/trait implementation");
     }
 
     pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
