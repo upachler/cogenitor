@@ -6,9 +6,9 @@ use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 use http::Method;
 use openapiv3::{OpenAPI, ReferenceOr, Type};
 
-#[cfg(test)]
-use crate::types::Format;
 use crate::types::{BooleanOrSchema, Operation, Parameter, ParameterLocation, PathItem, Schema};
+#[cfg(test)]
+use crate::types::{Format, Spec};
 
 pub struct OAS30Spec {
     openapi: Rc<OpenAPI>,
@@ -788,9 +788,6 @@ paths:
 #[cfg(test)]
 #[test]
 fn test_path_parameters() {
-    use crate::types::{ParameterLocation, Spec};
-    use http::Method;
-
     let oas = r"
 openapi: 3.0.0
 info:
@@ -834,7 +831,11 @@ components:
 ";
     println!("parsing {oas}");
     let spec = OAS30Spec::from_str(oas).unwrap();
+    test_path_parameters_impl(spec)
+}
 
+#[cfg(test)]
+fn test_path_parameters_impl(spec: impl Spec) {
     // Test path_iter() implementation - should return exactly one parameterized path
     let paths: Vec<_> = spec.path_iter().collect();
     assert_eq!(paths.len(), 1);
