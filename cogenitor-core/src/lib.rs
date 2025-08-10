@@ -10,10 +10,7 @@ use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
-    codemodel::{
-        function::{Function, FunctionBuilder},
-        implementation::ImplementationBuilder,
-    },
+    codemodel::{function::FunctionBuilder, implementation::ImplementationBuilder},
     types::{Operation, Parameter, PathItem},
 };
 
@@ -110,7 +107,7 @@ fn populate_types(
             )?;
         }
     }
-    m.insert_implementation(client_impl.build());
+    m.insert_implementation(client_impl.build())?;
 
     Ok(TypeMapping { mapping })
 }
@@ -230,7 +227,7 @@ fn parse_path_into_impl_fn(
 
     let return_type = TypeRef::GenericInstance {
         generic_type: Box::new(cm.type_result()),
-        type_parameter: vec![],
+        type_parameter: vec![cm.type_unit(), cm.type_unit()], // FIXME: need to assign proper result type params
     };
     let mut function =
         FunctionBuilder::new(fn_name, return_type).param("self".to_string(), cm.type_ref_self());
@@ -475,12 +472,12 @@ paths:
                 implementing_type: _,
             } => associated_functions
                 .iter()
-                .find(|f| f.name() == "pet_findByStatus_get"),
+                .find(|f| f.name() == "pet_findbystatus_get"),
         }
         .unwrap();
 
         assert_eq!(
-            1,
+            2,
             the_answer_get_fn.function_params_iter().count(),
             "function decl object: {the_answer_get_fn:?}"
         );

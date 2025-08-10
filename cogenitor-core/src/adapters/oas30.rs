@@ -21,88 +21,117 @@ trait OAS3Resolver<T> {
     {
         match ro {
             ReferenceOr::Reference { reference } => {
-                let reference = reference
-                    .strip_prefix("#/components/schemas/")
-                    .expect(&format!("Only references to '#/components/schemas/*' are supported, '{reference}' does not match"));
-                self.resolve_reference(reference)
+                let prefix = self.prefix();
+                let reference = reference.strip_prefix(prefix).expect(&format!(
+                    "Only references to '{prefix}*' are supported, '{reference}' does not match"
+                ));
+                Some(self.resolve_reference(reference).expect(
+                    format!("expected reference {reference} not found in OpenAPI object").as_ref(),
+                ))
             }
             ReferenceOr::Item(s) => Some(s.borrow()),
         }
     }
 
+    fn prefix(&self) -> &str;
     fn resolve_reference(&self, reference: &str) -> Option<&T>;
 }
 
 impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
     fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Schema> {
-        let ro = self
-            .components
-            .as_ref()
-            .unwrap()
-            .schemas
-            .get(reference)
-            .expect(format!("expected reference {reference} not found in OpenAPI object").as_ref());
+        let ro = self.components.as_ref()?.schemas.get(reference)?;
+        self.resolve(ro)
+    }
+    fn prefix(&self) -> &str {
+        "#/components/schemas/"
+    }
+}
+
+impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &str {
+        "#/paths/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::PathItem> {
+        let ro = self.paths.paths.get(reference)?;
         self.resolve(ro)
     }
 }
 
 #[derive(Clone)]
-enum RefSource {
+enum SchemaSource {
     SchemaName(String),
     SchemaProperty((Box<OAS30SchemaRef>, String)),
     AdditionalProperties(Box<OAS30SchemaRef>),
     Items(Box<OAS30SchemaRef>),
+    OperationParam(openapiv3::Schema),
 }
 
-impl std::fmt::Debug for RefSource {
+impl std::fmt::Debug for SchemaSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RefSource::SchemaName(name) => f.write_fmt(format_args!("'{name}'")),
-            RefSource::AdditionalProperties(oas30_schema_ref) => {
+            SchemaSource::SchemaName(name) => f.write_fmt(format_args!("'{name}'")),
+            SchemaSource::AdditionalProperties(oas30_schema_ref) => {
                 f.write_fmt(format_args!("{oas30_schema_ref:?}.additionalProperties"))
             }
-            RefSource::SchemaProperty((oas30_schema_ref, name)) => {
+            SchemaSource::SchemaProperty((oas30_schema_ref, name)) => {
                 f.write_fmt(format_args!("{oas30_schema_ref:?}.properties.{name}"))
             }
-            RefSource::Items(oas30_schema_ref) => {
+            SchemaSource::Items(oas30_schema_ref) => {
                 f.write_fmt(format_args!("{oas30_schema_ref:?}.items"))
             }
+            SchemaSource::OperationParam(_) => f.write_str("InlineSchema"),
         }
     }
 }
 
-impl Hash for RefSource {
+impl Hash for SchemaSource {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            RefSource::SchemaName(n) => n.hash(state),
-            RefSource::SchemaProperty(p) => {
+            SchemaSource::SchemaName(n) => n.hash(state),
+            SchemaSource::SchemaProperty(p) => {
                 state.write("p".as_bytes());
                 p.0.hash(state);
                 p.1.hash(state);
             }
-            RefSource::AdditionalProperties(r) => {
+            SchemaSource::AdditionalProperties(r) => {
                 state.write("a".as_bytes());
                 r.hash(state)
             }
-            RefSource::Items(r) => {
-                state.write("".as_bytes());
+            SchemaSource::Items(r) => {
+                state.write("i".as_bytes());
                 r.hash(state);
+            }
+            SchemaSource::OperationParam(_) => {
+                state.write("inline".as_bytes());
+                // Note: We can't hash the schema content easily, so we just use a constant
+                // This means inline schemas will hash to the same value, which is not ideal
+                // but should work for basic functionality
             }
         }
     }
 }
 
-impl PartialEq for RefSource {
+impl PartialEq for SchemaSource {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (RefSource::SchemaName(s), RefSource::SchemaName(o)) => s.eq(o),
-            (RefSource::SchemaProperty(s), RefSource::SchemaProperty(o)) => s.eq(o),
-            (RefSource::AdditionalProperties(s), RefSource::AdditionalProperties(o)) => s.eq(o),
+            (SchemaSource::SchemaName(s), SchemaSource::SchemaName(o)) => s.eq(o),
+            (SchemaSource::SchemaProperty(s), SchemaSource::SchemaProperty(o)) => s.eq(o),
+            (SchemaSource::AdditionalProperties(s), SchemaSource::AdditionalProperties(o)) => {
+                s.eq(o)
+            }
+            (SchemaSource::Items(s), SchemaSource::Items(o)) => s.eq(o),
+            (SchemaSource::OperationParam(_), SchemaSource::OperationParam(_)) => {
+                todo!("this is broken, needs to compare path properly");
+                // For simplicity, we consider all inline schemas as different
+                // A proper implementation would compare schema content
+                false
+            }
             _ => false,
         }
     }
 }
-impl Eq for RefSource {}
+impl Eq for SchemaSource {}
 
 fn schema_from_additional_properties(
     oas_schema: &openapiv3::Schema,
@@ -140,7 +169,7 @@ fn schema_from_property<'a, 'b>(
 #[derive(Clone)]
 pub struct OAS30SchemaRef {
     openapi: Rc<OpenAPI>,
-    ref_source: RefSource,
+    ref_source: SchemaSource,
 }
 
 impl std::fmt::Debug for OAS30SchemaRef {
@@ -167,21 +196,22 @@ impl Eq for OAS30SchemaRef {}
 impl OAS30SchemaRef {
     fn inner(&self) -> &openapiv3::Schema {
         match &self.ref_source {
-            RefSource::SchemaName(schema_name) => {
+            SchemaSource::SchemaName(schema_name) => {
                 self.openapi.resolve_reference(schema_name).unwrap()
             }
-            RefSource::AdditionalProperties(schema_ref) => {
+            SchemaSource::AdditionalProperties(schema_ref) => {
                 let ro = schema_from_additional_properties(schema_ref.inner()).unwrap();
                 self.openapi.resolve(ro).unwrap()
             }
-            RefSource::Items(schema_ref) => {
+            SchemaSource::Items(schema_ref) => {
                 let ro = schema_from_items(schema_ref.inner()).unwrap();
                 self.openapi.resolve(ro).unwrap()
             }
-            RefSource::SchemaProperty((schema_ref, name)) => {
+            SchemaSource::SchemaProperty((schema_ref, name)) => {
                 let ro = schema_from_property(schema_ref.inner(), name).unwrap();
                 self.openapi.resolve(ro).unwrap()
             }
+            SchemaSource::OperationParam(schema) => schema,
         }
     }
 }
@@ -215,8 +245,8 @@ fn schema_name_of_reference_or(
 impl Schema for OAS30SchemaRef {
     fn name(&self) -> Option<&str> {
         match &self.ref_source {
-            RefSource::SchemaName(name) => Some(name),
-            RefSource::SchemaProperty((ref_source, name)) => {
+            SchemaSource::SchemaName(name) => Some(name),
+            SchemaSource::SchemaProperty((ref_source, name)) => {
                 // the name of a schema referenced via a property of
                 // onother schema is either tne name in the reference
                 // (e.g. '#/components/schemas/MySchemaName') or
@@ -229,7 +259,7 @@ impl Schema for OAS30SchemaRef {
                     None
                 }
             }
-            RefSource::Items(schema_ref) => {
+            SchemaSource::Items(schema_ref) => {
                 if let openapiv3::SchemaKind::Type(Type::Array(a)) = &schema_ref.inner().schema_kind
                 {
                     schema_name_of_reference_or(a.items.as_ref()?)
@@ -237,7 +267,7 @@ impl Schema for OAS30SchemaRef {
                     None
                 }
             }
-            RefSource::AdditionalProperties(schema_ref) => {
+            SchemaSource::AdditionalProperties(schema_ref) => {
                 if let openapiv3::SchemaKind::Type(Type::Object(o)) =
                     &schema_ref.inner().schema_kind
                 {
@@ -252,6 +282,7 @@ impl Schema for OAS30SchemaRef {
                     None
                 }
             }
+            SchemaSource::OperationParam(_) => None,
         }
     }
 
@@ -337,7 +368,8 @@ impl Schema for OAS30SchemaRef {
         match &self.inner().schema_kind {
             SchemaKind::Type(Type::Object(t)) => {
                 for (k, _v) in t.properties.iter() {
-                    let ref_source = RefSource::SchemaProperty((Box::new(self.clone()), k.clone()));
+                    let ref_source =
+                        SchemaSource::SchemaProperty((Box::new(self.clone()), k.clone()));
                     let type_ = OAS30SchemaRef {
                         openapi: self.openapi.clone(),
                         ref_source,
@@ -366,7 +398,7 @@ impl Schema for OAS30SchemaRef {
                 if schema_from_additional_properties(inner).is_some() {
                     BooleanOrSchema::<Self>::Schema(Self {
                         openapi: self.openapi.clone(),
-                        ref_source: RefSource::AdditionalProperties(Box::new(self.clone())),
+                        ref_source: SchemaSource::AdditionalProperties(Box::new(self.clone())),
                     })
                 } else {
                     BooleanOrSchema::<Self>::Boolean(true)
@@ -379,7 +411,7 @@ impl Schema for OAS30SchemaRef {
     fn items(&self) -> Option<Vec<impl Schema>> {
         match &self.inner().schema_kind {
             openapiv3::SchemaKind::Type(openapiv3::Type::Array(_)) => {
-                let ref_source = RefSource::Items(Box::new(self.clone()));
+                let ref_source = SchemaSource::Items(Box::new(self.clone()));
                 Some(vec![OAS30SchemaRef {
                     openapi: self.openapi.clone(),
                     ref_source,
@@ -430,21 +462,25 @@ impl crate::Spec for OAS30Spec {
     }
 
     fn path_iter(&self) -> impl Iterator<Item = (String, impl PathItem)> {
-        let paths: Vec<(String, openapiv3::PathItem)> = self
+        let paths: Vec<String> = self
             .openapi
             .paths
             .paths
             .iter()
             .filter_map(|(path, path_item_ref)| {
                 if let ReferenceOr::Item(path_item) = path_item_ref {
-                    Some((path.clone(), path_item.clone()))
+                    Some(path.clone())
                 } else {
                     None
                 }
             })
             .collect();
 
-        PathIterator { paths, current: 0 }
+        PathIterator {
+            paths,
+            current: 0,
+            openapi: self.openapi.clone(),
+        }
     }
 }
 
@@ -475,7 +511,7 @@ impl Iterator for SchemaIterator {
             schema_name.clone(),
             OAS30SchemaRef {
                 openapi,
-                ref_source: RefSource::SchemaName(schema_name),
+                ref_source: SchemaSource::SchemaName(schema_name),
             },
         );
         self.curr = self.curr + 1;
@@ -485,20 +521,23 @@ impl Iterator for SchemaIterator {
 
 // Path Iterator Implementation
 struct PathIterator {
-    paths: Vec<(String, openapiv3::PathItem)>,
+    paths: Vec<String>,
     current: usize,
+    openapi: Rc<OpenAPI>,
 }
 
 impl Iterator for PathIterator {
-    type Item = (String, OAS30PathItem);
+    type Item = (String, OAS30PathItemRef);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((path, path_item)) = self.paths.get(self.current) {
+        let path = self.paths.get(self.current);
+        if let Some(path) = path {
             self.current += 1;
             return Some((
                 path.clone(),
-                OAS30PathItem {
-                    path_item: path_item.clone(),
+                OAS30PathItemRef {
+                    path: path.clone(),
+                    openapi: self.openapi.clone(),
                 },
             ));
         }
@@ -507,56 +546,79 @@ impl Iterator for PathIterator {
 }
 
 // OAS30 PathItem Implementation
-pub struct OAS30PathItem {
-    path_item: openapiv3::PathItem,
+#[derive(Clone, Debug)]
+pub struct OAS30PathItemRef {
+    path: String,
+    openapi: Rc<OpenAPI>,
 }
 
 fn extract_operation(
-    operations: &mut Vec<(Method, OAS30Operation)>,
-    method: http::Method,
-    opt_op: &Option<openapiv3::Operation>,
+    operations: &mut Vec<OAS30OperationRef>,
+    method: Method,
+    operation: &Option<openapiv3::Operation>,
+    path_item: &OAS30PathItemRef,
 ) {
-    if let Some(op) = opt_op {
-        operations.push((
-            method,
-            OAS30Operation {
-                operation: op.clone(),
-            },
-        ));
+    if operation.is_some() {
+        operations.push(OAS30OperationRef {
+            path_item: path_item.clone(),
+            method: method,
+        });
     }
 }
+
+pub struct OAS30ParametersRef {}
 
 fn extract_parameter(
     parameters: &mut Vec<OAS30Parameter>,
     location: ParameterLocation,
     data: &openapiv3::ParameterData,
+    openapi: Rc<OpenAPI>,
 ) {
     let param_name = data.name.clone();
+    let schema = match &data.format {
+        openapiv3::ParameterSchemaOrContent::Schema(schema_ref) => Some(schema_ref.clone()),
+        openapiv3::ParameterSchemaOrContent::Content(_) => None,
+    };
     parameters.push(OAS30Parameter {
         param_name,
         location,
+        schema,
+        openapi,
     });
 }
 
 fn to_parameters_iter(
     oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,
+    openapi: Rc<OpenAPI>,
 ) -> impl Iterator<Item = impl Parameter> {
     let mut params = Vec::new();
     for param_ref in oas30_parameters {
         match param_ref {
             ReferenceOr::Item(param) => match param {
-                openapiv3::Parameter::Query { parameter_data, .. } => {
-                    extract_parameter(&mut params, ParameterLocation::Query, parameter_data)
-                }
-                openapiv3::Parameter::Header { parameter_data, .. } => {
-                    extract_parameter(&mut params, ParameterLocation::Header, parameter_data)
-                }
-                openapiv3::Parameter::Path { parameter_data, .. } => {
-                    extract_parameter(&mut params, ParameterLocation::Path, parameter_data)
-                }
-                openapiv3::Parameter::Cookie { parameter_data, .. } => {
-                    extract_parameter(&mut params, ParameterLocation::Cookie, parameter_data)
-                }
+                openapiv3::Parameter::Query { parameter_data, .. } => extract_parameter(
+                    &mut params,
+                    ParameterLocation::Query,
+                    parameter_data,
+                    openapi.clone(),
+                ),
+                openapiv3::Parameter::Header { parameter_data, .. } => extract_parameter(
+                    &mut params,
+                    ParameterLocation::Header,
+                    parameter_data,
+                    openapi.clone(),
+                ),
+                openapiv3::Parameter::Path { parameter_data, .. } => extract_parameter(
+                    &mut params,
+                    ParameterLocation::Path,
+                    parameter_data,
+                    openapi.clone(),
+                ),
+                openapiv3::Parameter::Cookie { parameter_data, .. } => extract_parameter(
+                    &mut params,
+                    ParameterLocation::Cookie,
+                    parameter_data,
+                    openapi.clone(),
+                ),
             },
             _ => (),
         }
@@ -564,39 +626,77 @@ fn to_parameters_iter(
     params.into_iter()
 }
 
-impl PathItem for OAS30PathItem {
+impl OAS30PathItemRef {
+    fn resolve_inner(&self) -> Option<&openapiv3::PathItem> {
+        let ro_opt = self.openapi.paths.paths.get(&self.path);
+        ro_opt.unwrap(); // TODO: remove!
+        ro_opt.and_then(|ro| self.openapi.resolve(ro))
+    }
+}
+
+impl PathItem for OAS30PathItemRef {
     fn operations_iter(&self) -> impl Iterator<Item = (Method, impl Operation)> {
         let mut operations = Vec::new();
 
-        extract_operation(&mut operations, Method::GET, &self.path_item.get);
-        extract_operation(&mut operations, Method::PUT, &self.path_item.put);
-        extract_operation(&mut operations, Method::POST, &self.path_item.post);
-        extract_operation(&mut operations, Method::DELETE, &self.path_item.delete);
-        extract_operation(&mut operations, Method::OPTIONS, &self.path_item.options);
-        extract_operation(&mut operations, Method::HEAD, &self.path_item.head);
-        extract_operation(&mut operations, Method::PATCH, &self.path_item.patch);
-        extract_operation(&mut operations, Method::TRACE, &self.path_item.trace);
+        let path_item = self.resolve_inner().unwrap();
+        extract_operation(&mut operations, Method::GET, &path_item.get, self);
+        extract_operation(&mut operations, Method::PUT, &path_item.put, self);
+        extract_operation(&mut operations, Method::POST, &path_item.post, self);
+        extract_operation(&mut operations, Method::DELETE, &path_item.delete, self);
+        extract_operation(&mut operations, Method::OPTIONS, &path_item.options, self);
+        extract_operation(&mut operations, Method::HEAD, &path_item.head, self);
+        extract_operation(&mut operations, Method::PATCH, &path_item.patch, self);
+        extract_operation(&mut operations, Method::TRACE, &path_item.trace, self);
 
-        operations.into_iter()
+        operations.into_iter().map(|op| (op.method.clone(), op))
     }
 
     fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.path_item.parameters)
+        to_parameters_iter(
+            &self.resolve_inner().unwrap().parameters,
+            self.openapi.clone(),
+        )
     }
 }
 
 // OAS30 Operation Implementation
-pub struct OAS30Operation {
-    operation: openapiv3::Operation,
+#[derive(Debug)]
+pub struct OAS30OperationRef {
+    path_item: OAS30PathItemRef,
+    method: http::Method,
 }
 
-impl Operation for OAS30Operation {
+impl OAS30OperationRef {
+    fn resolve_inner(&self) -> Option<&openapiv3::Operation> {
+        self.path_item
+            .resolve_inner()
+            .and_then(|path_item| match self.method {
+                Method::GET => path_item.get.as_ref(),
+                Method::DELETE => path_item.delete.as_ref(),
+                Method::HEAD => path_item.head.as_ref(),
+                Method::OPTIONS => path_item.options.as_ref(),
+                Method::PATCH => path_item.patch.as_ref(),
+                Method::POST => path_item.post.as_ref(),
+                Method::PUT => path_item.put.as_ref(),
+                Method::TRACE => path_item.trace.as_ref(),
+                _ => panic!("unhandled method {:?}", self.method),
+            })
+    }
+}
+
+impl Operation for OAS30OperationRef {
     fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.operation.parameters)
+        to_parameters_iter(
+            &self
+                .resolve_inner()
+                .expect(&format!("cannot resolve inner for {self:?}"))
+                .parameters,
+            self.path_item.openapi.clone(),
+        )
     }
 
     fn operation_id(&self) -> Option<&str> {
-        self.operation.operation_id.as_deref()
+        self.resolve_inner()?.operation_id.as_deref()
     }
 }
 
@@ -604,6 +704,8 @@ impl Operation for OAS30Operation {
 pub struct OAS30Parameter {
     param_name: String,
     location: ParameterLocation,
+    schema: Option<openapiv3::ReferenceOr<openapiv3::Schema>>,
+    openapi: Rc<OpenAPI>,
 }
 
 impl Parameter for OAS30Parameter {
@@ -616,8 +718,28 @@ impl Parameter for OAS30Parameter {
     }
 
     fn schema(&self) -> Option<impl Schema> {
-        todo!();
-        Option::<OAS30SchemaRef>::None
+        if let Some(schema_ref) = &self.schema {
+            match schema_ref {
+                ReferenceOr::Reference { reference } => {
+                    let schema_name = reference
+                        .strip_prefix("#/components/schemas/")
+                        .expect(&format!("Only references to '#/components/schemas/*' are supported, '{reference}' does not match"));
+                    Some(OAS30SchemaRef {
+                        openapi: self.openapi.clone(),
+                        ref_source: SchemaSource::SchemaName(schema_name.to_string()),
+                    })
+                }
+                ReferenceOr::Item(schema) => {
+                    // For inline schemas in parameters, we create an OAS30SchemaRef with InlineSchema variant
+                    Some(OAS30SchemaRef {
+                        openapi: self.openapi.clone(),
+                        ref_source: SchemaSource::OperationParam(schema.clone()),
+                    })
+                }
+            }
+        } else {
+            None
+        }
     }
 }
 

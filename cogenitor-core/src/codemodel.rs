@@ -83,6 +83,9 @@ impl Codemodel {
         }
     }
 
+    pub fn type_unit(&self) -> TypeRef {
+        TypeRef::Builtin(Rc::new(Builtin::Unit))
+    }
     #[allow(unused)]
     pub fn type_u8(&self) -> TypeRef {
         TypeRef::Builtin(Rc::new(Builtin::U8))
@@ -485,6 +488,7 @@ pub enum Builtin {
     F32,
     F64,
     Bool,
+    Unit,
 }
 
 impl Builtin {
@@ -501,6 +505,7 @@ impl Builtin {
             Builtin::F32 => "f32",
             Builtin::F64 => "f64",
             Builtin::Bool => "bool",
+            Builtin::Unit => "()",
         }
     }
 }
