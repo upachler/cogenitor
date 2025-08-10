@@ -528,23 +528,20 @@ fn extract_operation(
 }
 
 fn extract_parameter(
-    parameters: &mut Vec<(String, OAS31Parameter)>,
+    parameters: &mut Vec<OAS31Parameter>,
     location: ParameterLocation,
     param: &oas3::spec::Parameter,
 ) {
     let param_name = param.name.clone();
-    parameters.push((
-        param_name.clone(),
-        OAS31Parameter {
-            param_name,
-            location,
-        },
-    ));
+    parameters.push(OAS31Parameter {
+        param_name,
+        location,
+    });
 }
 
 fn to_parameters_iter(
     oas31_parameters: &Vec<ObjectOrReference<oas3::spec::Parameter>>,
-) -> impl Iterator<Item = (String, impl Parameter)> {
+) -> impl Iterator<Item = impl Parameter> {
     let mut params = Vec::new();
     for param_ref in oas31_parameters {
         if let ObjectOrReference::Object(param) = param_ref {
@@ -576,7 +573,7 @@ impl PathItem for OAS31PathItem {
         operations.into_iter()
     }
 
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
         to_parameters_iter(&self.path_item.parameters)
     }
 }
@@ -587,7 +584,7 @@ pub struct OAS31Operation {
 }
 
 impl Operation for OAS31Operation {
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
         to_parameters_iter(&self.operation.parameters)
     }
 
@@ -609,6 +606,11 @@ impl Parameter for OAS31Parameter {
 
     fn name(&self) -> &str {
         &self.param_name
+    }
+
+    fn schema(&self) -> Option<impl Schema> {
+        todo!();
+        Option::<OAS31SchemaRef>::None
     }
 }
 
@@ -712,8 +714,7 @@ paths:
         let parameters: Vec<_> = path_item.parameters().collect();
         assert_eq!(parameters.len(), 1);
 
-        let (param_name, param) = &parameters[0];
-        assert_eq!(param_name, "id");
+        let param = &parameters[0];
         assert_eq!(param.name(), "id");
         assert_eq!(param.in_(), ParameterLocation::Path);
     }
@@ -886,8 +887,8 @@ components:
             .unwrap();
         let params: Vec<_> = get_op.1.parameters().collect();
         assert_eq!(params.len(), 1);
-        assert_eq!(params[0].0, "limit");
-        assert_eq!(params[0].1.in_(), ParameterLocation::Query);
+        assert_eq!(params[0].name(), "limit");
+        assert_eq!(params[0].in_(), ParameterLocation::Query);
 
         // Check /pets/{petId} path parameters
         let pet_id_path = paths
@@ -896,7 +897,7 @@ components:
             .unwrap();
         let path_params: Vec<_> = pet_id_path.1.parameters().collect();
         assert_eq!(path_params.len(), 1);
-        assert_eq!(path_params[0].0, "petId");
-        assert_eq!(path_params[0].1.in_(), ParameterLocation::Path);
+        assert_eq!(path_params[0].name(), "petId");
+        assert_eq!(path_params[0].in_(), ParameterLocation::Path);
     }
 }

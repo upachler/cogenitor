@@ -1,3 +1,4 @@
+// FIXME: This panics currently, because endpoint parameters cannot be processed. Run the test_fn_params() test function, it fails too.
 cogenitor::generate_api!("test-data/petstore.yaml");
 
 #[cfg(test)]

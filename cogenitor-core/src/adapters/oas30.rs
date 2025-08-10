@@ -527,23 +527,20 @@ fn extract_operation(
 }
 
 fn extract_parameter(
-    parameters: &mut Vec<(String, OAS30Parameter)>,
+    parameters: &mut Vec<OAS30Parameter>,
     location: ParameterLocation,
     data: &openapiv3::ParameterData,
 ) {
     let param_name = data.name.clone();
-    parameters.push((
-        param_name.clone(),
-        OAS30Parameter {
-            param_name,
-            location,
-        },
-    ));
+    parameters.push(OAS30Parameter {
+        param_name,
+        location,
+    });
 }
 
 fn to_parameters_iter(
     oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,
-) -> impl Iterator<Item = (String, impl Parameter)> {
+) -> impl Iterator<Item = impl Parameter> {
     let mut params = Vec::new();
     for param_ref in oas30_parameters {
         match param_ref {
@@ -583,7 +580,7 @@ impl PathItem for OAS30PathItem {
         operations.into_iter()
     }
 
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
         to_parameters_iter(&self.path_item.parameters)
     }
 }
@@ -594,7 +591,7 @@ pub struct OAS30Operation {
 }
 
 impl Operation for OAS30Operation {
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)> {
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
         to_parameters_iter(&self.operation.parameters)
     }
 
@@ -616,6 +613,11 @@ impl Parameter for OAS30Parameter {
 
     fn name(&self) -> &str {
         &self.param_name
+    }
+
+    fn schema(&self) -> Option<impl Schema> {
+        todo!();
+        Option::<OAS30SchemaRef>::None
     }
 }
 
@@ -850,8 +852,7 @@ fn test_path_parameters_impl(spec: impl Spec) {
     assert_eq!(path_params.len(), 1, "Path should have one parameter");
 
     // Verify path parameter properties: name and location
-    let (param_name, param) = &path_params[0];
-    assert_eq!(param_name, "bar_name");
+    let param = &path_params[0];
     assert_eq!(param.name(), "bar_name");
     assert_eq!(param.in_(), ParameterLocation::Path);
 
@@ -876,8 +877,7 @@ fn test_path_parameters_impl(spec: impl Spec) {
     );
 
     // Verify operation parameter properties: name and location (query vs path)
-    let (param_name, param) = &get_params[0];
-    assert_eq!(param_name, "with_foo");
+    let param = &get_params[0];
     assert_eq!(param.name(), "with_foo");
     assert_eq!(param.in_(), ParameterLocation::Query);
 }

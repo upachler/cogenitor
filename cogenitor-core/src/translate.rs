@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 // Array of strict keywords (currently in use)
 const STRICT_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -32,12 +34,15 @@ where
     }
 }
 pub(crate) fn schema_to_rust_typename(schema_name: &str) -> String {
-    // for now, all we do is clone..
     avoid_reserved(&capitalize(schema_name))
 }
 
 pub(crate) fn property_to_rust_fieldname(property_name: &str) -> String {
     avoid_reserved(&decapitalize(property_name))
+}
+
+pub(crate) fn parameter_to_rust_fn_param(param_name: &str) -> String {
+    avoid_reserved(&decapitalize(param_name))
 }
 
 fn avoid_reserved(s: &str) -> String {
@@ -95,7 +100,38 @@ pub(crate) fn path_method_to_rust_fn_name(
     };
 
     // Ensure the function name doesn't conflict with Rust keywords
-    Ok(function_name)
+    Ok(avoid_reserved(&function_name))
+}
+
+pub trait ContainsPredicate {
+    fn contains_str(&self, item: &str) -> bool;
+}
+impl ContainsPredicate for Vec<&str> {
+    fn contains_str(&self, item: &str) -> bool {
+        self.into_iter().any(|e| *e == item)
+    }
+}
+impl ContainsPredicate for HashSet<String> {
+    fn contains_str(&self, value: &str) -> bool {
+        self.contains(value)
+    }
+}
+impl<V> ContainsPredicate for HashMap<String, V> {
+    fn contains_str(&self, item: &str) -> bool {
+        self.contains_key(item)
+    }
+}
+
+/** Implements a collision strategy for generating unique names across a namespace */
+pub fn uncollide(predicate: &impl ContainsPredicate, name_candidate: String) -> String {
+    let mut n = 0;
+    let mut candidate = name_candidate.clone();
+    while predicate.contains_str(&candidate) {
+        n += 1;
+        candidate = format!("{name_candidate}{n}");
+    }
+
+    candidate
 }
 
 #[cfg(test)]

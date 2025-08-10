@@ -26,6 +26,7 @@ pub struct Codemodel {
 lazy_static! {
     static ref STRING_TYPE_NAME: FQTN = FQTN::from_str("std::string::String").unwrap();
     static ref VEC_TYPE_NAME: FQTN = FQTN::from_str("std::vec::Vec").unwrap();
+    static ref RESULT_TYPE_NAME: FQTN = FQTN::from_str("std::result::Result").unwrap();
 }
 
 impl Codemodel {
@@ -49,6 +50,12 @@ impl Codemodel {
         let vec_struct = StructBuilder::new("Vec").build().unwrap();
         vec.insert_struct(vec_struct)?;
         std.insert_module(vec)?;
+
+        let mut result = Module::new("result");
+        let result_struct = StructBuilder::new("Result").build().unwrap();
+        result.insert_struct(result_struct)?;
+        std.insert_module(result)?;
+
         self.insert_crate(std)?;
         Ok(self)
     }
@@ -122,6 +129,30 @@ impl Codemodel {
 
     pub fn type_vec(&self) -> TypeRef {
         self.find_type(&VEC_TYPE_NAME).unwrap()
+    }
+
+    pub fn type_result(&self) -> TypeRef {
+        self.find_type(&RESULT_TYPE_NAME).unwrap()
+    }
+
+    pub fn type_self(&self) -> TypeRef {
+        TypeRef::SelfType
+    }
+
+    pub fn type_ref_self(&self) -> TypeRef {
+        TypeRef::Reference {
+            referenced_type: self.type_self().into(),
+            mutable: false,
+            lifetime: None,
+        }
+    }
+
+    pub fn type_ref_mut_self(&self) -> TypeRef {
+        TypeRef::Reference {
+            referenced_type: self.type_self().into(),
+            mutable: true,
+            lifetime: None,
+        }
     }
 }
 
@@ -273,7 +304,7 @@ impl EnumVariant {
 }
 
 impl NamedItem for EnumVariant {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }
@@ -297,7 +328,7 @@ impl Enum {
 }
 
 impl NamedItem for Enum {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }
@@ -474,7 +505,7 @@ impl Builtin {
     }
 }
 impl NamedItem for Builtin {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(self.name_ref())
     }
 }
@@ -500,7 +531,7 @@ impl Alias {
 }
 
 impl NamedItem for Alias {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         (&self.name).into()
     }
 }
@@ -517,10 +548,63 @@ pub enum TypeRef {
         generic_type: Box<TypeRef>,
         type_parameter: Vec<TypeRef>,
     },
+    /// actual `Self`, the reference
+    SelfType,
+    /// a reference `&` to a type `T` - which may be mutable
+    /// and/or have an attached lifetime specifier.
+    /// E.g. for `&'a mut u32`
+    /// `referenced_type` refers to `u32`'s `TypeRef`, `mutable` is `true`
+    /// and `lifetime` is `Some("a".to_string())`
+    Reference {
+        referenced_type: Box<TypeRef>,
+        mutable: bool,
+        lifetime: Option<String>,
+    },
+}
+
+impl PartialEq for TypeRef {
+    fn eq(&self, other: &Self) -> bool {
+        use TypeRef::*;
+        match (self, other) {
+            (Indirection(lhs), Indirection(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Struct(lhs), Struct(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Enum(lhs), Enum(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Builtin(lhs), Builtin(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Alias(lhs), Alias(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (
+                GenericInstance {
+                    generic_type: lhs_generic_type,
+                    type_parameter: lhs_type_parameter,
+                },
+                GenericInstance {
+                    generic_type: rhs_generic_type,
+                    type_parameter: rhs_type_parameter,
+                },
+            ) => lhs_generic_type == rhs_generic_type && lhs_type_parameter == rhs_type_parameter,
+            (SelfType, SelfType) => true,
+            (
+                Reference {
+                    referenced_type: lhs_referenced_type,
+                    mutable: lhs_mutable,
+                    lifetime: lhs_lifetime,
+                },
+                Reference {
+                    referenced_type: rhs_referenced_type,
+                    mutable: rhs_mutable,
+                    lifetime: rhs_lifetime,
+                },
+            ) => {
+                lhs_referenced_type == rhs_referenced_type
+                    && lhs_mutable == rhs_mutable
+                    && lhs_lifetime == rhs_lifetime
+            }
+            _ => false,
+        }
+    }
 }
 
 impl NamedItem for TypeRef {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         match self {
             TypeRef::Indirection(i) => match i.borrow().deref() {
                 Indirection::Stub(name) => Cow::Owned(name.to_string()),
@@ -542,6 +626,20 @@ impl NamedItem for TypeRef {
                     .join(",");
                 Cow::Owned(format!("{generic_type}<{param_list}>"))
             }
+            TypeRef::SelfType => Cow::Borrowed("Self"),
+            TypeRef::Reference {
+                referenced_type,
+                mutable,
+                lifetime,
+            } => {
+                let type_name = referenced_type.name();
+                let mutable = if *mutable { "mut " } else { "" };
+                let lifetime = lifetime
+                    .as_ref()
+                    .map(|lt| format!("'{lt} "))
+                    .unwrap_or("".to_string());
+                Cow::Owned(format!("&{lifetime}{mutable}{type_name}"))
+            }
         }
     }
 }
@@ -558,7 +656,7 @@ impl From<Enum> for TypeRef {
 }
 
 pub trait NamedItem {
-    fn name(&self) -> Cow<str>;
+    fn name<'a>(&'a self) -> Cow<'a, str>;
 }
 
 #[derive(Debug)]
@@ -573,7 +671,7 @@ impl Field {
     }
 }
 impl NamedItem for Field {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }
@@ -596,7 +694,7 @@ impl Struct {
 }
 
 impl NamedItem for Struct {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }
@@ -669,10 +767,6 @@ impl<T: NamedItem + Clone> Namespace<T> {
     fn find_item(&self, name: &str) -> Option<T> {
         self.item_map.get(name).map(Clone::clone)
     }
-
-    fn contains_item(&self, name: &str) -> bool {
-        self.item_map.contains_key(name)
-    }
 }
 
 impl<T> Default for Namespace<T> {
@@ -735,7 +829,7 @@ impl<T: NamedItem> Deref for CodeModelRef<T> {
 }
 
 impl<T: NamedItem> NamedItem for CodeModelRef<T> {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         // we need Cow::Owned here because .borrow() returns a temporary value,
         // so the reference to the item is only valid within the scope of this
         // method
@@ -841,7 +935,7 @@ impl Module {
 }
 
 impl NamedItem for Module {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }

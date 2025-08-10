@@ -4,11 +4,11 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, quote};
 
 use syn::{
-    Attribute, Expr, ExprLit, LitStr, Meta, MetaNameValue, Path, Token,
+    Expr, ExprLit, LitStr, MetaNameValue,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
-    token::{Colon, Comma},
+    token::Comma,
 };
 
 // Structure to hold key-value pair arguments

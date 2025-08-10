@@ -1,5 +1,6 @@
 use crate::codemodel::{TypeRef, function::Function};
 
+#[derive(Debug)]
 pub enum Implementation {
     InherentImpl {
         implementing_type: TypeRef,

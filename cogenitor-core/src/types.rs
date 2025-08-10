@@ -109,13 +109,13 @@ pub trait PathItem {
     // see 'get', 'put', ... in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
     fn operations_iter(&self) -> impl Iterator<Item = (http::Method, impl Operation)>;
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)>;
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter>;
 }
 
 // see https://spec.openapis.org/oas/v3.0.4.html#x4-7-10
 pub trait Operation {
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = (String, impl Parameter)>;
+    fn parameters(&self) -> impl Iterator<Item = impl Parameter>;
     fn operation_id(&self) -> Option<&str>;
 }
 
@@ -133,4 +133,8 @@ pub trait Parameter {
     /// see https://spec.openapis.org/oas/v3.0.4.html#parameter-in
     fn in_(&self) -> ParameterLocation;
     fn name(&self) -> &str;
+
+    /// `Parameter` must either contain a `schema` or a `content` field
+    /// - so only either one of them can be `None`
+    fn schema(&self) -> Option<impl Schema>;
 }

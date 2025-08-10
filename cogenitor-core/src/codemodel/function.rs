@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::codemodel::{NamedItem, TypeRef};
 
+#[derive(Debug)]
 pub struct Function {
     name: String,
     function_params: Vec<FunctionParam>,
@@ -19,11 +20,12 @@ impl Function {
 }
 
 impl NamedItem for Function {
-    fn name(&self) -> Cow<str> {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
         Cow::Borrowed(&self.name)
     }
 }
 
+#[derive(Debug)]
 pub struct FunctionParam {
     pub name: String,
     pub type_: TypeRef,
@@ -55,5 +57,12 @@ impl FunctionBuilder {
             function_params: self.function_params,
             return_type: self.return_type,
         }
+    }
+
+    pub fn param_names(&self) -> Vec<&str> {
+        self.function_params
+            .iter()
+            .map(|p| p.name.as_ref())
+            .collect::<Vec<&str>>()
     }
 }

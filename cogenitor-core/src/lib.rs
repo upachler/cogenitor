@@ -1,9 +1,21 @@
 use anyhow::anyhow;
 use proc_macro2::TokenStream;
-use std::{collections::HashMap, io::Read, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Read,
+    path::Path,
+};
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
+
+use crate::{
+    codemodel::{
+        function::{Function, FunctionBuilder},
+        implementation::ImplementationBuilder,
+    },
+    types::{Operation, Parameter, PathItem},
+};
 
 pub mod codemodel;
 mod codewriter;
@@ -77,6 +89,28 @@ fn populate_types(
         let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
         mapping.insert(name, type_ref);
     }
+
+    let client_struct = StructBuilder::new("Client")
+        .attr_with_input("derive", quote::quote!((Debug)))?
+        .build()?;
+    let client_struct = m.insert_struct(client_struct)?;
+
+    let mut client_impl = ImplementationBuilder::new_inherent(client_struct);
+    for (path, path_item) in spec.path_iter() {
+        for (method, path_op) in path_item.operations_iter() {
+            println!("creating method for {method} {path}");
+            client_impl = parse_path_into_impl_fn(
+                cm,
+                client_impl,
+                &mapping,
+                &path,
+                &path_item,
+                method,
+                &path_op,
+            )?;
+        }
+    }
+    m.insert_implementation(client_impl.build());
 
     Ok(TypeMapping { mapping })
 }
@@ -181,6 +215,70 @@ fn parse_schema(
     }
 }
 
+fn parse_path_into_impl_fn(
+    cm: &mut Codemodel,
+    impl_builder: ImplementationBuilder,
+    mapping: &HashMap<String, TypeRef>,
+    path_name: &str,
+    path_item: &impl PathItem,
+    method: http::Method,
+    path_op: &impl Operation,
+) -> anyhow::Result<ImplementationBuilder> {
+    let candidate_name = translate::path_method_to_rust_fn_name(&method, path_name)?;
+
+    let fn_name = candidate_name; // FIXME: handle collisions
+
+    let return_type = TypeRef::GenericInstance {
+        generic_type: Box::new(cm.type_result()),
+        type_parameter: vec![],
+    };
+    let mut function =
+        FunctionBuilder::new(fn_name, return_type).param("self".to_string(), cm.type_ref_self());
+
+    // Parameters in path_op can override those in path_item, so
+    // we apply the non-shadowed of path_item first
+    let outer_params = path_item
+        .parameters()
+        .filter(|param| {
+            let shadowed = path_op
+                .parameters()
+                .any(|p| p.name() == param.name() && p.in_() == param.in_());
+            !shadowed
+        })
+        .collect::<Vec<_>>();
+    for param in outer_params {
+        function = append_param(function, cm, mapping, &param)?;
+    }
+
+    for param in path_op.parameters() {
+        function = append_param(function, cm, mapping, &param)?;
+    }
+    Ok(impl_builder.function(function.build()))
+}
+
+/// Append a parameter to the given FunctionBuilder, while respecting the
+fn append_param(
+    function: FunctionBuilder,
+    cm: &mut Codemodel,
+    mapping: &HashMap<String, TypeRef>,
+    param: &impl Parameter,
+) -> anyhow::Result<FunctionBuilder> {
+    let existing_names = function.param_names();
+
+    let mapped_name = translate::parameter_to_rust_fn_param(param.name());
+    let mapped_name = translate::uncollide(&existing_names, mapped_name);
+
+    let mapped_type;
+    if let Some(schema) = param.schema() {
+        mapped_type = type_ref_of(cm, mapping, &schema)?;
+    } else {
+        todo!("implement handling of 'content' field in OAS parameter object");
+    }
+
+    // finally add parameter
+    Ok(function.param(mapped_name, mapped_type))
+}
+
 fn type_ref_of(
     cm: &mut Codemodel,
     mapping: &HashMap<String, TypeRef>,
@@ -240,7 +338,7 @@ fn type_ref_of(
 mod tests {
     use std::{io::Cursor, str::FromStr};
 
-    use crate::codemodel::Scope;
+    use crate::codemodel::{NamedItem, Scope, implementation::Implementation};
 
     use super::*;
 
@@ -295,6 +393,98 @@ mod tests {
             }
             _ => panic!("struct expected, found {pet:?}"),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_fn() -> anyhow::Result<()> {
+        let oas = r"
+openapi: 3.0.0
+info:
+    title: test for generating an endpoint function
+    version: v1
+paths:
+    /nothing:
+        get:
+            responses:
+                '204':
+                    description: get no response here";
+
+        let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
+        assert_eq!(1, spec.path_iter().count());
+        let (cm, _mapping) = super::build_codemodel(&spec)?;
+        let crate_ = cm.find_crate("crate").unwrap();
+        assert!(crate_.type_iter().any(|t| t.name() == "Client"));
+        let the_answer_get_fn = match crate_.implementations_iter().next().unwrap() {
+            Implementation::InherentImpl {
+                associated_functions,
+                implementing_type: _,
+            } => associated_functions
+                .iter()
+                .find(|f| f.name() == "nothing_get"),
+        }
+        .unwrap();
+
+        assert_eq!(
+            1,
+            the_answer_get_fn.function_params_iter().count(),
+            "function decl object: {the_answer_get_fn:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fn_params() -> anyhow::Result<()> {
+        let oas = r"
+openapi: 3.0.0
+info:
+    title: test for generating an endpoint function
+    version: v1
+paths:
+    /pet/findByStatus:
+        get:
+            tags:
+                - pet
+            summary: Finds Pets by status.
+            description: Multiple status values can be provided with comma separated strings.
+            operationId: findPetsByStatus
+            parameters:
+                -   name: status
+                    in: query
+                    description: Status values that need to be considered for filter
+                    required: false
+                    explode: true
+                    schema:
+                        type: string
+                        default: available
+                        enum:
+                            - available
+                            - pending
+                            - sold
+            responses: {}";
+
+        let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
+        assert_eq!(1, spec.path_iter().count());
+        let (cm, _mapping) = super::build_codemodel(&spec)?;
+        let crate_ = cm.find_crate("crate").unwrap();
+        assert!(crate_.type_iter().any(|t| t.name() == "Client"));
+        let the_answer_get_fn = match crate_.implementations_iter().next().unwrap() {
+            Implementation::InherentImpl {
+                associated_functions,
+                implementing_type: _,
+            } => associated_functions
+                .iter()
+                .find(|f| f.name() == "pet_findByStatus_get"),
+        }
+        .unwrap();
+
+        assert_eq!(
+            1,
+            the_answer_get_fn.function_params_iter().count(),
+            "function decl object: {the_answer_get_fn:?}"
+        );
+
         Ok(())
     }
 }

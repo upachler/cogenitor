@@ -1,0 +1,3 @@
+* Refactor TypeRef into an ItemRef - likely we need both TypeRef and ItemRef, but one should be convertible into the other
+* Refactor lib.rs so that the implementations and plumbing logic land in sub-modules
+* rename types.rs module, because it does not really contain types, but rather a layer to abstract from specific OAS versions and their respective library implementations. Probably, 'oas' is a good module name...
