@@ -13,3 +13,5 @@ It wants to support
 ```mermaid
 
 ```
+
+For more info about how code is generated, check the [conversion rules](doc/conversion_rules.md)
