@@ -85,6 +85,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogenitor-model"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "serde",
+]
+
+[[package]]
 name = "cogenitor-test"
 version = "0.1.0"
 dependencies = [

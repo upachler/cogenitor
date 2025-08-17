@@ -1,7 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["cogenitor", "cogenitor-core", "cogenitor-macro", "cogenitor-test"]
+members = [
+    "cogenitor",
+    "cogenitor-core",
+    "cogenitor-macro",
+    "cogenitor-model",
+    "cogenitor-test",
+]
 
 [workspace.dependencies]
 http = "1.3"
 anyhow = "1"
+serde = "1.0"
