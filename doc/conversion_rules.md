@@ -90,14 +90,27 @@ TODO: Async methods
 
 ### Parameters
 
-Parameters are mapped directly to operation method parameters. Rust method parameter types derive by the usual rules for type mapping (see above).
-
-TODO: instead of useing `String`, use `&str` for parameters.
+Parameters are mapped directly to operation method parameters. Rust method parameter types derive by the usual rules for type mapping (see above). Since parameters that affect an operation can be declared at the path level or the operation level, both parameter lists are considered for generation.
 
 
-### TODO: RequestBody
+#### Parameters object
 
-### TODO: Responses
+To generate a list of parameters to include into the operation method from the operation's declared parameters, the following steps are performed:
+* Since operation-level parameters can shadow path-level parameters if they have the same values for `in` and `name`, the shadowed parameters are removed from the path-level parameter list.
+* the list of operation-level parameters is appended to the list of remaining path-level parameters
+* Each parameter is converted into a Rust parameter in sequence, applying the rules for type mapping defined above. The name of the generated method parameters are taken by converting the names in the operation parameters.
+
+TODO: instead of using `String`, use `&str` for parameters.
+
+
+#### RequestBody
+
+If an operation has a request body (defined by its `requestBody` field), a parameter named `body` (subject to de-duplication) is appended to the operation method's parameter list.
+
+The type of the parameter is determined using the rules in the section about [mapping content](#'media-type-content-mapping).
+
+
+### Responses
 
 Broadly speaking, we distinguish between _known_ responses (that is, responses explicitely declared in the OpenAPI file) and _unknown_ responses (responses that the server yields, but are not defined in the API). Unknown responses are generally treated as an error, regardless of their response code (when an endpoint declared to respond with 200 returns 201, this is an error in terms of the spec).
 
@@ -135,12 +148,12 @@ The enum is generated as follows:
 * The variants are defined like this:
   - Declared error codes, such as HTTP 400, are called after their {statusFragment}, so HTTP 400 becomes `NotFound400`. For each declared HTTP error (4xx or 5xx ranges), such a variant is generated. The variants are generated as tuple variants, whose single member type is the type yielded by mapping the media type of that response (see section below)
   - For undeclared HTTP responses, a variant called `UnknownResponse` is generated. The variant is generated as a tuple variant whoose type is `http::Response` from the `http` crate.
-  - For all other errors, a tuple variant `OtherError` is generated. It's contained type is `anyhow::Error` from the `anyhow` crate.
+  - For all other errors, a tuple variant `OtherError` is generated. It's contained type is `Box<dyn Error>`.
 
 
-#### Media type mappings
+### Media type content mapping <a name='media-type-content-mapping'>
 
-A response defined in OpenAPI may define schemata for one or more media types. Consider the following fragment:
+A response or a request body defined in OpenAPI may define schemata for one or more media types. Consider the following fragment:
 
 ```yaml
       responses:
@@ -158,13 +171,15 @@ A response defined in OpenAPI may define schemata for one or more media types. C
 Note that the example above is taken from the petstore example for OpenAPI which defines the same schema for the XML and JSON media types, but this may not be the case for other OpenAPI for other OpenAPI definitions.
 
 The type mapped to a response follows the following rules:
-* If a response does not have a content field or the content map is empty, the mapped type is the unit type `()`
-* If a response contains only one media type, the type of the response is the type mapped for this media type.
+* If a request body or response declaration does not have a `content` field or the content map is empty, the mapped type is the unit type `()`
+* If a request body or response declaration contains only one media type, the type representing the declaration is the type mapped for this media type's `schema` field.
 * If there is more than one media type object present, an enum is generated to distinguish between media types. The enum is generated according to the following rules:
-  - The name of the enum is {operationFragment}{statusFragment}`Content`. For `PUT /pet`, {operationFragment} is `PetPut`. For the HTTP 200 example above, the {statusFragment} is `Ok200`. So the resulting name of the enum is `PetPutOk200Content`.
-  - For each media type, an enum variant is introduced. Media types are translated into Rust enum variant names by using the type and subtype and uppercasing each of their first characters. Then both are joint into a string (ignoring the '/' separator). Media type wildcard characters (`*`) present in the type or subtype are replaced by the string `Any`. So a media type `application/json` becomes an enum variant called `ApplicationJson`. A media type wildcard `text/*` will become `TextAny`.
+  - The name of the enum is depends on whether the content is present in a response or a request body declaration:
+    - For request body declarations, the enum's name is generated using the pattern {operationFragment}`Content`. So for `PUT /pet`, the enum will be called `PetPutContent`.
+    - For responses, the enum's name is generated using the pattern {operationFragment}{statusFragment}`Content`. For `PUT /pet`, {operationFragment} is `PetPut`. For the HTTP 200 example above, the {statusFragment} is `Ok200`. So the resulting name of the enum is `PetPutOk200Content`.
+  - For each media type, an enum variant is introduced. Media types are translated into Rust enum variant names by using the type and subtype and uppercasing each of their first characters. Then both are joint into a string (ignoring the '/' separator). Media type wildcard characters (`*`) present in the type or subtype are replaced by the string `Any`. So a media type `application/json` becomes an enum variant called `ApplicationJson`. A media type wildcard `text/*` will become `TextAny`. Non-alphabetic characters are removed.
 
-With the rules above, the example shown will generate the following enum:
+With the rules above, the example shown above will generate the following enum:
 ```rust
 enum PetPutOk200Content {
     ApplicationJson(Pet),
