@@ -1,3 +1,4 @@
+use http::Uri;
 use std::{collections::HashMap, io, str::FromStr};
 
 use json::JsonValue;
@@ -8,9 +9,19 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
 
     fn from_reader(r: impl io::Read) -> anyhow::Result<impl Spec>;
 
-    fn schemata_iter(&self) -> impl Iterator<Item = (String, Self::Schema)>;
+    fn components(&self) -> Option<impl Components>;
 
-    fn path_iter(&self) -> impl Iterator<Item = (String, impl PathItem)>;
+    fn paths(&self) -> impl Iterator<Item = (String, impl PathItem)>;
+
+    fn schemata_iter(
+        &self,
+    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)>;
+}
+
+pub trait Components {
+    fn schemas(
+        &self,
+    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)>;
 }
 
 /**
@@ -137,4 +148,39 @@ pub trait Parameter {
     /// `Parameter` must either contain a `schema` or a `content` field
     /// - so only either one of them can be `None`
     fn schema(&self) -> Option<impl Schema>;
+}
+
+struct OASPath {}
+
+/// types implementing Reference contain the path in the OAS tree
+/// as well as the means necessary to resolve that path
+pub trait Reference {
+    type Target;
+
+    /// resolve the URI to the actual target object
+    fn resolve(&self) -> Self::Target;
+
+    /// the URI to resolve to the target object
+    fn uri(&self) -> &str;
+}
+
+pub enum RefOr<R>
+where
+    R: Reference,
+{
+    Reference(R),
+    Object(R::Target),
+}
+
+impl<R> RefOr<R>
+where
+    R: Reference,
+    R::Target: Clone,
+{
+    pub fn resolve(&self) -> R::Target {
+        match self {
+            RefOr::Reference(r) => r.resolve(),
+            RefOr::Object(o) => o.clone(),
+        }
+    }
 }

@@ -11,7 +11,7 @@ use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
     codemodel::{function::FunctionBuilder, implementation::ImplementationBuilder},
-    types::{Operation, Parameter, PathItem},
+    types::{Operation, Parameter, PathItem, Reference},
 };
 
 pub mod codemodel;
@@ -83,8 +83,21 @@ fn populate_types(
     // the module, stubs are replaced by proper types.
     for (name, schema) in spec.schemata_iter() {
         println!("creating type for schema '{name}");
-        let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
-        mapping.insert(name, type_ref);
+        match schema {
+            types::RefOr::Reference(r) => {
+                let (_, target_name) = r
+                    .uri()
+                    .rsplit_once('/')
+                    .expect("URI does not end in type name separated by '/'");
+                let alias_name = translate::schema_to_rust_typename(&name);
+                let target = mapping.get(target_name).expect("type not found for schema");
+                m.insert_type_alias(&alias_name, target.clone());
+            }
+            types::RefOr::Object(schema) => {
+                let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
+                mapping.insert(name, type_ref);
+            }
+        }
     }
 
     let client_struct = StructBuilder::new("Client")
@@ -93,7 +106,7 @@ fn populate_types(
     let client_struct = m.insert_struct(client_struct)?;
 
     let mut client_impl = ImplementationBuilder::new_inherent(client_struct);
-    for (path, path_item) in spec.path_iter() {
+    for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
             println!("creating method for {method} {path}");
             client_impl = parse_path_into_impl_fn(
@@ -408,7 +421,7 @@ paths:
                     description: get no response here";
 
         let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
-        assert_eq!(1, spec.path_iter().count());
+        assert_eq!(1, spec.paths().count());
         let (cm, _mapping) = super::build_codemodel(&spec)?;
         let crate_ = cm.find_crate("crate").unwrap();
         assert!(crate_.type_iter().any(|t| t.name() == "Client"));
@@ -462,7 +475,7 @@ paths:
             responses: {}";
 
         let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
-        assert_eq!(1, spec.path_iter().count());
+        assert_eq!(1, spec.paths().count());
         let (cm, _mapping) = super::build_codemodel(&spec)?;
         let crate_ = cm.find_crate("crate").unwrap();
         assert!(crate_.type_iter().any(|t| t.name() == "Client"));

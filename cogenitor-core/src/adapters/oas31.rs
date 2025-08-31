@@ -413,11 +413,7 @@ impl From<Spec> for OAS31Spec {
             spec: Rc::new(spec),
         }
     }
-}
-
-impl crate::Spec for OAS31Spec {
-    type Schema = OAS31SchemaRef;
-
+    schema_to_rust_typename(schema_name)
     fn from_reader(r: impl std::io::Read) -> anyhow::Result<impl crate::Spec> {
         let r = BufReader::new(r);
         let spec: Spec = oas3::from_reader(r)?;
@@ -437,7 +433,7 @@ impl crate::Spec for OAS31Spec {
         }
     }
 
-    fn path_iter(&self) -> impl Iterator<Item = (String, impl PathItem)> {
+    fn paths(&self) -> impl Iterator<Item = (String, impl PathItem)> {
         let paths: Vec<(String, oas3::spec::PathItem)> = self
             .spec
             .paths
@@ -696,7 +692,7 @@ paths:
             operationId: getUser";
 
         let spec = OAS31Spec::from_str(oas).unwrap();
-        let paths: Vec<_> = spec.path_iter().collect();
+        let paths: Vec<_> = spec.paths().collect();
         assert_eq!(paths.len(), 2);
 
         // Check first path
@@ -872,7 +868,7 @@ components:
         assert_eq!(items.unwrap().len(), 1);
 
         // Test path iteration
-        let paths: Vec<_> = spec.path_iter().collect();
+        let paths: Vec<_> = spec.paths().collect();
         assert_eq!(paths.len(), 2);
 
         // Check /pets path
