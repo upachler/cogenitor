@@ -6,7 +6,10 @@ use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 use http::Method;
 use oas3::spec::{ObjectOrReference, ObjectSchema, Spec};
 
-use crate::types::{BooleanOrSchema, Operation, Parameter, ParameterLocation, PathItem, Schema};
+use crate::types::{
+    BooleanOrSchema, Components, Operation, Parameter, ParameterLocation, PathItem, RefOr,
+    Reference, Schema,
+};
 
 pub struct OAS31Spec {
     spec: Rc<Spec>,
@@ -413,14 +416,40 @@ impl From<Spec> for OAS31Spec {
             spec: Rc::new(spec),
         }
     }
-    schema_to_rust_typename(schema_name)
+}
+
+struct OAS31SchemaReference {
+    spec: Rc<Spec>,
+    uri: String,
+}
+
+impl Reference for OAS31SchemaReference {
+    type Target = OAS31SchemaRef;
+
+    fn resolve(&self) -> Self::Target {
+        OAS31SchemaRef {
+            spec: self.spec.clone(),
+            ref_source: RefSource::SchemaName(self.uri.clone()),
+        }
+    }
+
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl crate::Spec for OAS31Spec {
+    type Schema = OAS31SchemaRef;
+
     fn from_reader(r: impl std::io::Read) -> anyhow::Result<impl crate::Spec> {
         let r = BufReader::new(r);
         let spec: Spec = oas3::from_reader(r)?;
         Ok(OAS31Spec::from(spec))
     }
 
-    fn schemata_iter(&self) -> impl Iterator<Item = (String, Self::Schema)> {
+    fn schemata_iter(
+        &self,
+    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
         SchemaIterator {
             spec: self.spec.clone(),
             curr: 0,
@@ -448,6 +477,18 @@ impl From<Spec> for OAS31Spec {
 
         PathIterator { paths, current: 0 }
     }
+
+    fn components(&self) -> Option<impl Components> {
+        self.spec.components.as_ref().map(|_| self)
+    }
+}
+
+impl Components for &OAS31Spec {
+    fn schemas(
+        &self,
+    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
+        crate::Spec::schemata_iter(*self)
+    }
 }
 
 struct SchemaIterator {
@@ -457,7 +498,7 @@ struct SchemaIterator {
 }
 
 impl Iterator for SchemaIterator {
-    type Item = (String, OAS31SchemaRef);
+    type Item = (String, RefOr<OAS31SchemaReference>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr == self.end {
@@ -465,16 +506,21 @@ impl Iterator for SchemaIterator {
         }
 
         let schemas = &self.spec.components.as_ref()?.schemas;
-
-        let (schema_name, _) = schemas.iter().nth(self.curr)?;
+        let (schema_name, schema_or_ref) = schemas.iter().nth(self.curr)?;
         let spec = self.spec.clone();
-        let r = (
-            schema_name.clone(),
-            OAS31SchemaRef {
+
+        let ref_or = match schema_or_ref {
+            ObjectOrReference::Ref { ref_path } => RefOr::Reference(OAS31SchemaReference {
+                spec,
+                uri: ref_path.clone(),
+            }),
+            ObjectOrReference::Object(_) => RefOr::Object(OAS31SchemaRef {
                 spec,
                 ref_source: RefSource::SchemaName(schema_name.clone()),
-            },
-        );
+            }),
+        };
+
+        let r = (schema_name.clone(), ref_or);
         self.curr = self.curr + 1;
         Some(r)
     }
@@ -661,7 +707,8 @@ components:
         let (name, schema) = schemas.pop().unwrap();
         assert_eq!(name, "NumberFormats");
 
-        let properties = schema.properties();
+        let resolved_schema = schema.resolve();
+        let properties = resolved_schema.properties();
         assert_eq!(properties.len(), 4);
 
         let int32_field = properties.get("int32_field").unwrap();
@@ -819,7 +866,7 @@ components:
             .find(|(name, _)| name == "Pet")
             .unwrap()
             .1
-            .clone();
+            .resolve();
         assert_eq!(pet_schema.name(), Some("Pet"));
 
         let properties = pet_schema.properties();
@@ -862,7 +909,7 @@ components:
             .find(|(name, _)| name == "PetList")
             .unwrap()
             .1
-            .clone();
+            .resolve();
         let items = pet_list_schema.items();
         assert!(items.is_some());
         assert_eq!(items.unwrap().len(), 1);
