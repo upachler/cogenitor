@@ -46,13 +46,13 @@ impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
         let ro = self.components.as_ref()?.schemas.get(reference)?;
         self.resolve(ro)
     }
-    fn prefix(&self) -> &str {
+    fn prefix(&self) -> &'static str {
         "#/components/schemas/"
     }
 }
 
 impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
-    fn prefix(&self) -> &str {
+    fn prefix(&self) -> &'static str {
         "#/paths/"
     }
 
@@ -63,13 +63,47 @@ impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
 }
 
 #[derive(Clone)]
-enum SchemaSource {
+pub enum SchemaSource {
     Uri(String),
     SchemaName(String),
     SchemaProperty((Box<OAS30SchemaPointer>, String)),
     AdditionalProperties(Box<OAS30SchemaPointer>),
     Items(Box<OAS30SchemaPointer>),
     OperationParam(openapiv3::Schema),
+}
+
+impl OAS30Source for SchemaSource {
+    type OAS30Type = openapiv3::Schema;
+
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        match self {
+            SchemaSource::Uri(uri) => {
+                let schema_name = uri
+                    .strip_prefix(OAS3Resolver::<openapiv3::Schema>::prefix(openapi))
+                    .unwrap();
+                openapi.resolve_reference(schema_name).unwrap()
+            }
+            SchemaSource::SchemaName(schema_name) => {
+                openapi.resolve_reference(schema_name).unwrap()
+            }
+            SchemaSource::AdditionalProperties(schema_ref) => {
+                let ro = schema_from_additional_properties(schema_ref.inner()).unwrap();
+                openapi.resolve(ro).unwrap()
+            }
+            SchemaSource::Items(schema_ref) => {
+                let ro = schema_from_items(schema_ref.inner()).unwrap();
+                openapi.resolve(ro).unwrap()
+            }
+            SchemaSource::SchemaProperty((schema_ref, name)) => {
+                let ro = schema_from_property(schema_ref.inner(), name).unwrap();
+                openapi.resolve(ro).unwrap()
+            }
+            SchemaSource::OperationParam(schema) => schema,
+        }
+    }
 }
 
 impl std::fmt::Debug for SchemaSource {
@@ -173,13 +207,22 @@ fn schema_from_property<'a, 'b>(
     }
 }
 
-#[derive(Clone)]
-pub struct OAS30SchemaPointer {
-    openapi: Rc<OpenAPI>,
-    ref_source: SchemaSource,
+trait OAS30Source: std::fmt::Debug + Hash + PartialEq {
+    type OAS30Type;
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b;
 }
 
-impl std::fmt::Debug for OAS30SchemaPointer {
+#[derive(Clone)]
+pub struct OAS30Pointer<S: OAS30Source> {
+    openapi: Rc<OpenAPI>,
+    ref_source: S,
+}
+
+pub type OAS30SchemaPointer = OAS30Pointer<SchemaSource>;
+
+impl<S: OAS30Source> std::fmt::Debug for OAS30Pointer<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ref_source = &self.ref_source;
         f.write_fmt(format_args!("OAS30SchemaRef[{ref_source:?}]"))?;
@@ -187,47 +230,22 @@ impl std::fmt::Debug for OAS30SchemaPointer {
     }
 }
 
-impl Hash for OAS30SchemaPointer {
+impl<S: OAS30Source> Hash for OAS30Pointer<S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ref_source.hash(state);
     }
 }
 
-impl PartialEq for OAS30SchemaPointer {
+impl<S: OAS30Source> PartialEq for OAS30Pointer<S> {
     fn eq(&self, other: &Self) -> bool {
         self.ref_source.eq(&other.ref_source)
     }
 }
-impl Eq for OAS30SchemaPointer {}
+impl<S: OAS30Source> Eq for OAS30Pointer<S> {}
 
-impl OAS30SchemaPointer {
-    fn inner(&self) -> &openapiv3::Schema {
-        match &self.ref_source {
-            SchemaSource::Uri(uri) => {
-                let schema_name = uri
-                    .strip_prefix(OAS3Resolver::<openapiv3::Schema>::prefix(
-                        self.openapi.as_ref(),
-                    ))
-                    .unwrap();
-                self.openapi.resolve_reference(schema_name).unwrap()
-            }
-            SchemaSource::SchemaName(schema_name) => {
-                self.openapi.resolve_reference(schema_name).unwrap()
-            }
-            SchemaSource::AdditionalProperties(schema_ref) => {
-                let ro = schema_from_additional_properties(schema_ref.inner()).unwrap();
-                self.openapi.resolve(ro).unwrap()
-            }
-            SchemaSource::Items(schema_ref) => {
-                let ro = schema_from_items(schema_ref.inner()).unwrap();
-                self.openapi.resolve(ro).unwrap()
-            }
-            SchemaSource::SchemaProperty((schema_ref, name)) => {
-                let ro = schema_from_property(schema_ref.inner(), name).unwrap();
-                self.openapi.resolve(ro).unwrap()
-            }
-            SchemaSource::OperationParam(schema) => schema,
-        }
+impl<S: OAS30Source> OAS30Pointer<S> {
+    fn inner(&self) -> &S::OAS30Type {
+        self.ref_source.inner(&self.openapi)
     }
 }
 
