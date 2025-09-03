@@ -7,8 +7,8 @@ use http::Method;
 use oas3::spec::{ObjectOrReference, ObjectSchema, Spec};
 
 use crate::types::{
-    BooleanOrSchema, Components, Operation, Parameter, ParameterLocation, PathItem, RefOr,
-    Reference, Schema,
+    BooleanOrSchema, ByReference, Components, Operation, Parameter, ParameterLocation, PathItem,
+    RefOr, Reference, Schema,
 };
 
 pub struct OAS31Spec {
@@ -44,9 +44,9 @@ impl OAS31Resolver<ObjectSchema> for Spec {
 #[derive(Clone)]
 enum RefSource {
     SchemaName(String),
-    SchemaProperty((Box<OAS31SchemaRef>, String)),
-    AdditionalProperties(Box<OAS31SchemaRef>),
-    Items(Box<OAS31SchemaRef>),
+    SchemaProperty((Box<OAS31SchemaPointer>, String)),
+    AdditionalProperties(Box<OAS31SchemaPointer>),
+    Items(Box<OAS31SchemaPointer>),
 }
 
 impl std::fmt::Debug for RefSource {
@@ -117,12 +117,16 @@ fn schema_from_property<'a>(
 }
 
 #[derive(Clone)]
-pub struct OAS31SchemaRef {
+pub struct OAS31SchemaPointer {
     spec: Rc<Spec>,
     ref_source: RefSource,
 }
 
-impl std::fmt::Debug for OAS31SchemaRef {
+impl ByReference for OAS31SchemaPointer {
+    type Reference = OAS31SchemaReference;
+}
+
+impl std::fmt::Debug for OAS31SchemaPointer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ref_source = &self.ref_source;
         f.write_fmt(format_args!("OAS31SchemaRef[{ref_source:?}]"))?;
@@ -130,20 +134,20 @@ impl std::fmt::Debug for OAS31SchemaRef {
     }
 }
 
-impl Hash for OAS31SchemaRef {
+impl Hash for OAS31SchemaPointer {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ref_source.hash(state);
     }
 }
 
-impl PartialEq for OAS31SchemaRef {
+impl PartialEq for OAS31SchemaPointer {
     fn eq(&self, other: &Self) -> bool {
         self.ref_source.eq(&other.ref_source)
     }
 }
-impl Eq for OAS31SchemaRef {}
+impl Eq for OAS31SchemaPointer {}
 
-impl OAS31SchemaRef {
+impl OAS31SchemaPointer {
     fn inner(&self) -> &ObjectSchema {
         match &self.ref_source {
             RefSource::SchemaName(schema_name) => self.spec.resolve_reference(schema_name).unwrap(),
@@ -195,7 +199,7 @@ fn schema_name_of_reference_or(reference_or: &ObjectOrReference<ObjectSchema>) -
     }
 }
 
-impl Schema for OAS31SchemaRef {
+impl Schema for OAS31SchemaPointer {
     fn name(&self) -> Option<&str> {
         match &self.ref_source {
             RefSource::SchemaName(name) => Some(name),
@@ -282,10 +286,10 @@ impl Schema for OAS31SchemaRef {
         if all_of.is_empty() {
             None
         } else {
-            let schemas: Vec<OAS31SchemaRef> = all_of
+            let schemas: Vec<OAS31SchemaPointer> = all_of
                 .iter()
                 .enumerate()
-                .map(|(i, _)| OAS31SchemaRef {
+                .map(|(i, _)| OAS31SchemaPointer {
                     spec: self.spec.clone(),
                     ref_source: RefSource::SchemaName(format!("allOf_{}", i)), // This is a simplification
                 })
@@ -299,10 +303,10 @@ impl Schema for OAS31SchemaRef {
         if any_of.is_empty() {
             None
         } else {
-            let schemas: Vec<OAS31SchemaRef> = any_of
+            let schemas: Vec<OAS31SchemaPointer> = any_of
                 .iter()
                 .enumerate()
-                .map(|(i, _)| OAS31SchemaRef {
+                .map(|(i, _)| OAS31SchemaPointer {
                     spec: self.spec.clone(),
                     ref_source: RefSource::SchemaName(format!("anyOf_{}", i)), // This is a simplification
                 })
@@ -316,10 +320,10 @@ impl Schema for OAS31SchemaRef {
         if one_of.is_empty() {
             None
         } else {
-            let schemas: Vec<OAS31SchemaRef> = one_of
+            let schemas: Vec<OAS31SchemaPointer> = one_of
                 .iter()
                 .enumerate()
-                .map(|(i, _)| OAS31SchemaRef {
+                .map(|(i, _)| OAS31SchemaPointer {
                     spec: self.spec.clone(),
                     ref_source: RefSource::SchemaName(format!("oneOf_{}", i)), // This is a simplification
                 })
@@ -360,7 +364,7 @@ impl Schema for OAS31SchemaRef {
         let properties = &self.inner().properties;
         for (k, _v) in properties.iter() {
             let ref_source = RefSource::SchemaProperty((Box::new(self.clone()), k.clone()));
-            let type_ = OAS31SchemaRef {
+            let type_ = OAS31SchemaPointer {
                 spec: self.spec.clone(),
                 ref_source,
             };
@@ -370,7 +374,7 @@ impl Schema for OAS31SchemaRef {
     }
 
     fn pattern_properties(&self) -> std::collections::HashMap<String, impl Schema> {
-        HashMap::<_, OAS31SchemaRef>::new() // TODO: Implement pattern properties support
+        HashMap::<_, OAS31SchemaPointer>::new() // TODO: Implement pattern properties support
     }
 
     fn addtional_properties(&self) -> crate::types::BooleanOrSchema<impl Schema> {
@@ -391,7 +395,7 @@ impl Schema for OAS31SchemaRef {
     fn items(&self) -> Option<Vec<impl Schema>> {
         if let Some(_items) = &self.inner().items {
             let ref_source = RefSource::Items(Box::new(self.clone()));
-            Some(vec![OAS31SchemaRef {
+            Some(vec![OAS31SchemaPointer {
                 spec: self.spec.clone(),
                 ref_source,
             }])
@@ -418,16 +422,14 @@ impl From<Spec> for OAS31Spec {
     }
 }
 
-struct OAS31SchemaReference {
+pub struct OAS31SchemaReference {
     spec: Rc<Spec>,
     uri: String,
 }
 
-impl Reference for OAS31SchemaReference {
-    type Target = OAS31SchemaRef;
-
-    fn resolve(&self) -> Self::Target {
-        OAS31SchemaRef {
+impl Reference<OAS31SchemaPointer> for OAS31SchemaReference {
+    fn resolve(&self) -> OAS31SchemaPointer {
+        OAS31SchemaPointer {
             spec: self.spec.clone(),
             ref_source: RefSource::SchemaName(self.uri.clone()),
         }
@@ -439,7 +441,7 @@ impl Reference for OAS31SchemaReference {
 }
 
 impl crate::Spec for OAS31Spec {
-    type Schema = OAS31SchemaRef;
+    type Schema = OAS31SchemaPointer;
 
     fn from_reader(r: impl std::io::Read) -> anyhow::Result<impl crate::Spec> {
         let r = BufReader::new(r);
@@ -447,9 +449,7 @@ impl crate::Spec for OAS31Spec {
         Ok(OAS31Spec::from(spec))
     }
 
-    fn schemata_iter(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
+    fn schemata_iter(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)> {
         SchemaIterator {
             spec: self.spec.clone(),
             curr: 0,
@@ -484,9 +484,7 @@ impl crate::Spec for OAS31Spec {
 }
 
 impl Components for &OAS31Spec {
-    fn schemas(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
+    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)> {
         crate::Spec::schemata_iter(*self)
     }
 }
@@ -498,7 +496,7 @@ struct SchemaIterator {
 }
 
 impl Iterator for SchemaIterator {
-    type Item = (String, RefOr<OAS31SchemaReference>);
+    type Item = (String, RefOr<OAS31SchemaPointer>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr == self.end {
@@ -514,7 +512,7 @@ impl Iterator for SchemaIterator {
                 spec,
                 uri: ref_path.clone(),
             }),
-            ObjectOrReference::Object(_) => RefOr::Object(OAS31SchemaRef {
+            ObjectOrReference::Object(_) => RefOr::Object(OAS31SchemaPointer {
                 spec,
                 ref_source: RefSource::SchemaName(schema_name.clone()),
             }),
@@ -652,7 +650,7 @@ impl Parameter for OAS31Parameter {
 
     fn schema(&self) -> Option<impl Schema> {
         todo!();
-        Option::<OAS31SchemaRef>::None
+        Option::<OAS31SchemaPointer>::None
     }
 }
 

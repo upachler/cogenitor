@@ -13,15 +13,11 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
 
     fn paths(&self) -> impl Iterator<Item = (String, impl PathItem)>;
 
-    fn schemata_iter(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)>;
+    fn schemata_iter(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)>;
 }
 
 pub trait Components {
-    fn schemas(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)>;
+    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)>;
 }
 
 /**
@@ -70,7 +66,7 @@ Represents a schema for validating a JSON data item.
 We use this for type generation, so only fields relevant for this purpose are implemented.
 See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
-pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq {
+pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq + ByReference {
     /**
     If this schema is named (i.e. a YAML/JSON key is associated with its definition),
     this method returns that name.
@@ -154,30 +150,32 @@ struct OASPath {}
 
 /// types implementing Reference contain the path in the OAS tree
 /// as well as the means necessary to resolve that path
-pub trait Reference {
-    type Target;
-
+pub trait Reference<T> {
     /// resolve the URI to the actual target object
-    fn resolve(&self) -> Self::Target;
+    fn resolve(&self) -> T;
 
     /// the URI to resolve to the target object
     fn uri(&self) -> &str;
 }
 
-pub enum RefOr<R>
-where
-    R: Reference,
-{
-    Reference(R),
-    Object(R::Target),
+pub trait ByReference: Sized {
+    type Reference: Reference<Self>;
 }
 
-impl<R> RefOr<R>
+pub enum RefOr<T>
 where
-    R: Reference,
-    R::Target: Clone,
+    T: ByReference,
 {
-    pub fn resolve(&self) -> R::Target {
+    Reference(T::Reference),
+    Object(T),
+}
+
+impl<T> RefOr<T>
+where
+    T: ByReference,
+    T: Clone,
+{
+    pub fn resolve(&self) -> T {
         match self {
             RefOr::Reference(r) => r.resolve(),
             RefOr::Object(o) => o.clone(),

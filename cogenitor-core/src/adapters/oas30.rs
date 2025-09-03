@@ -10,8 +10,8 @@ use crate::translate::schema_to_rust_typename;
 #[cfg(test)]
 use crate::types::Format;
 use crate::types::{
-    BooleanOrSchema, Components, Operation, Parameter, ParameterLocation, PathItem, RefOr,
-    Reference, Schema, Spec,
+    BooleanOrSchema, ByReference, Components, Operation, Parameter, ParameterLocation, PathItem,
+    RefOr, Reference, Schema, Spec,
 };
 
 pub struct OAS30Spec {
@@ -231,15 +231,13 @@ impl OAS30SchemaPointer {
     }
 }
 
-struct OAS30SchemaReference {
+pub struct OAS30SchemaReference {
     openapi: Rc<OpenAPI>,
     uri: String,
 }
 
-impl Reference for OAS30SchemaReference {
-    type Target = OAS30SchemaPointer;
-
-    fn resolve(&self) -> Self::Target {
+impl Reference<OAS30SchemaPointer> for OAS30SchemaReference {
+    fn resolve(&self) -> OAS30SchemaPointer {
         OAS30SchemaPointer {
             openapi: self.openapi.clone(),
             ref_source: SchemaSource::Uri(self.uri.clone()),
@@ -275,6 +273,10 @@ fn schema_name_of_reference_or(
         }
         ReferenceOr::Item(_) => None,
     }
+}
+
+impl ByReference for OAS30SchemaPointer {
+    type Reference = OAS30SchemaReference;
 }
 
 impl Schema for OAS30SchemaPointer {
@@ -484,9 +486,7 @@ impl crate::Spec for OAS30Spec {
         Ok(OAS30Spec::from(openapi))
     }
 
-    fn schemata_iter(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
+    fn schemata_iter(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)> {
         SchemaIterator {
             openapi: self.openapi.clone(),
             curr: 0,
@@ -527,9 +527,7 @@ impl crate::Spec for OAS30Spec {
 }
 
 impl Components for &OAS30Spec {
-    fn schemas(
-        &self,
-    ) -> impl Iterator<Item = (String, RefOr<impl Reference<Target = impl Schema>>)> {
+    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)> {
         // TODO: move implementation here
         Spec::schemata_iter(*self)
     }
@@ -542,7 +540,7 @@ struct SchemaIterator {
 }
 
 impl Iterator for SchemaIterator {
-    type Item = (String, RefOr<OAS30SchemaReference>);
+    type Item = (String, RefOr<OAS30SchemaPointer>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.curr == self.end {
