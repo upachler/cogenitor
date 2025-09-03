@@ -599,7 +599,7 @@ struct PathIterator {
 }
 
 impl Iterator for PathIterator {
-    type Item = (String, OAS30PathItemRef);
+    type Item = (String, OAS30PathItemPointer);
 
     fn next(&mut self) -> Option<Self::Item> {
         let path = self.paths.get(self.current);
@@ -607,8 +607,8 @@ impl Iterator for PathIterator {
             self.current += 1;
             return Some((
                 path.clone(),
-                OAS30PathItemRef {
-                    path: path.clone(),
+                OAS30PathItemPointer {
+                    ref_source: PathItemSource { path: path.clone() },
                     openapi: self.openapi.clone(),
                 },
             ));
@@ -618,25 +618,12 @@ impl Iterator for PathIterator {
 }
 
 // OAS30 PathItem Implementation
-#[derive(Clone, Debug)]
-pub struct OAS30PathItemRef {
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
+pub struct PathItemSource {
     path: String,
-    openapi: Rc<OpenAPI>,
 }
 
-fn extract_operation(
-    operations: &mut Vec<OAS30OperationRef>,
-    method: Method,
-    operation: &Option<openapiv3::Operation>,
-    path_item: &OAS30PathItemRef,
-) {
-    if operation.is_some() {
-        operations.push(OAS30OperationRef {
-            path_item: path_item.clone(),
-            method: method,
-        });
-    }
-}
+type OAS30PathItemPointer = OAS30Pointer<PathItemSource>;
 
 pub struct OAS30ParametersRef {}
 
@@ -698,77 +685,93 @@ fn to_parameters_iter(
     params.into_iter()
 }
 
-impl OAS30PathItemRef {
-    fn resolve_inner(&self) -> Option<&openapiv3::PathItem> {
-        let ro_opt = self.openapi.paths.paths.get(&self.path);
-        ro_opt.unwrap(); // TODO: remove!
-        ro_opt.and_then(|ro| self.openapi.resolve(ro))
+impl OAS30Source for PathItemSource {
+    type OAS30Type = openapiv3::PathItem;
+
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        let ro_opt = openapi.paths.paths.get(&self.path);
+        ro_opt.and_then(|ro| openapi.resolve(ro)).unwrap()
     }
 }
 
-impl PathItem for OAS30PathItemRef {
+impl PathItem for OAS30PathItemPointer {
     fn operations_iter(&self) -> impl Iterator<Item = (Method, impl Operation)> {
-        let mut operations = Vec::new();
-
-        let path_item = self.resolve_inner().unwrap();
-        extract_operation(&mut operations, Method::GET, &path_item.get, self);
-        extract_operation(&mut operations, Method::PUT, &path_item.put, self);
-        extract_operation(&mut operations, Method::POST, &path_item.post, self);
-        extract_operation(&mut operations, Method::DELETE, &path_item.delete, self);
-        extract_operation(&mut operations, Method::OPTIONS, &path_item.options, self);
-        extract_operation(&mut operations, Method::HEAD, &path_item.head, self);
-        extract_operation(&mut operations, Method::PATCH, &path_item.patch, self);
-        extract_operation(&mut operations, Method::TRACE, &path_item.trace, self);
-
-        operations.into_iter().map(|op| (op.method.clone(), op))
+        let path_item = self.inner();
+        vec![
+            (Method::GET, &path_item.get),
+            (Method::PUT, &path_item.put),
+            (Method::POST, &path_item.post),
+            (Method::DELETE, &path_item.delete),
+            (Method::OPTIONS, &path_item.options),
+            (Method::HEAD, &path_item.head),
+            (Method::PATCH, &path_item.patch),
+            (Method::TRACE, &path_item.trace),
+        ]
+        .into_iter()
+        .filter_map(|(method, operation_opt)| operation_opt.as_ref().map(|_operation| method))
+        .map(|method| {
+            let ref_source = OperationSource {
+                path_item: self.clone(),
+                method: method.clone(),
+            };
+            (
+                method,
+                OAS30OperationPointer {
+                    openapi: self.openapi.clone(),
+                    ref_source,
+                },
+            )
+        })
     }
 
     fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(
-            &self.resolve_inner().unwrap().parameters,
-            self.openapi.clone(),
-        )
+        to_parameters_iter(&self.inner().parameters, self.openapi.clone())
     }
 }
 
 // OAS30 Operation Implementation
-#[derive(Debug)]
-pub struct OAS30OperationRef {
-    path_item: OAS30PathItemRef,
+type OAS30OperationPointer = OAS30Pointer<OperationSource>;
+
+#[derive(Debug, PartialEq, Hash)]
+pub struct OperationSource {
+    path_item: OAS30PathItemPointer,
     method: http::Method,
 }
 
-impl OAS30OperationRef {
-    fn resolve_inner(&self) -> Option<&openapiv3::Operation> {
-        self.path_item
-            .resolve_inner()
-            .and_then(|path_item| match self.method {
-                Method::GET => path_item.get.as_ref(),
-                Method::DELETE => path_item.delete.as_ref(),
-                Method::HEAD => path_item.head.as_ref(),
-                Method::OPTIONS => path_item.options.as_ref(),
-                Method::PATCH => path_item.patch.as_ref(),
-                Method::POST => path_item.post.as_ref(),
-                Method::PUT => path_item.put.as_ref(),
-                Method::TRACE => path_item.trace.as_ref(),
-                _ => panic!("unhandled method {:?}", self.method),
-            })
+impl OAS30Source for OperationSource {
+    type OAS30Type = openapiv3::Operation;
+
+    fn inner<'a, 'b>(&'a self, _openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        let path_item = self.path_item.inner();
+
+        let op = match self.method {
+            Method::GET => &path_item.get,
+            Method::DELETE => &path_item.delete,
+            Method::HEAD => &path_item.head,
+            Method::OPTIONS => &path_item.options,
+            Method::PATCH => &path_item.patch,
+            Method::POST => &path_item.post,
+            Method::PUT => &path_item.put,
+            Method::TRACE => &path_item.trace,
+            _ => panic!("unhandled method {:?}", self.method),
+        };
+        op.as_ref().unwrap()
     }
 }
 
-impl Operation for OAS30OperationRef {
+impl Operation for OAS30OperationPointer {
     fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(
-            &self
-                .resolve_inner()
-                .expect(&format!("cannot resolve inner for {self:?}"))
-                .parameters,
-            self.path_item.openapi.clone(),
-        )
+        to_parameters_iter(&self.inner().parameters, self.openapi.clone())
     }
 
     fn operation_id(&self) -> Option<&str> {
-        self.resolve_inner()?.operation_id.as_deref()
+        self.inner().operation_id.as_deref()
     }
 }
 
