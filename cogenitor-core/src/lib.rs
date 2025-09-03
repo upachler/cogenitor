@@ -250,18 +250,20 @@ fn parse_path_into_impl_fn(
     let outer_params = path_item
         .parameters()
         .filter(|param| {
-            let shadowed = path_op
-                .parameters()
-                .any(|p| p.name() == param.name() && p.in_() == param.in_());
+            let param = param.resolve();
+            let shadowed = path_op.parameters().any(|p| {
+                let p = p.resolve();
+                p.name() == param.name() && p.in_() == param.in_()
+            });
             !shadowed
         })
         .collect::<Vec<_>>();
     for param in outer_params {
-        function = append_param(function, cm, mapping, &param)?;
+        function = append_param(function, cm, mapping, &param.resolve())?;
     }
 
     for param in path_op.parameters() {
-        function = append_param(function, cm, mapping, &param)?;
+        function = append_param(function, cm, mapping, &param.resolve())?;
     }
     Ok(impl_builder.function(function.build()))
 }

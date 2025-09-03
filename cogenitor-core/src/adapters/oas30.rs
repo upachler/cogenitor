@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
 use http::Method;
-use openapiv3::{OpenAPI, ReferenceOr, Type};
+use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr, Type};
 
 use crate::translate::schema_to_rust_typename;
 #[cfg(test)]
@@ -58,6 +58,17 @@ impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
 
     fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::PathItem> {
         let ro = self.paths.paths.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
+impl OAS3Resolver<openapiv3::Parameter> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &str {
+        "#/components/parameters/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Parameter> {
+        let ro = self.components.as_ref()?.parameters.get(reference)?;
         self.resolve(ro)
     }
 }
@@ -249,7 +260,10 @@ impl<S: OAS30Source> OAS30Pointer<S> {
     }
 }
 
-pub struct OAS30SchemaReference {
+type OAS30SchemaReference = OAS30Reference;
+type OAS30ParameterReference = OAS30Reference;
+
+pub struct OAS30Reference {
     openapi: Rc<OpenAPI>,
     uri: String,
 }
@@ -259,6 +273,22 @@ impl Reference<OAS30SchemaPointer> for OAS30SchemaReference {
         OAS30SchemaPointer {
             openapi: self.openapi.clone(),
             ref_source: SchemaSource::Uri(self.uri.clone()),
+        }
+    }
+
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl Reference<OAS30ParameterPointer> for OAS30SchemaReference {
+    fn resolve(&self) -> OAS30ParameterPointer {
+        OAS30ParameterPointer {
+            openapi: self.openapi.clone(),
+            ref_source: ParameterSource::Uri {
+                openapi: self.openapi.clone(),
+                uri: self.uri.clone(),
+            },
         }
     }
 
@@ -627,63 +657,63 @@ type OAS30PathItemPointer = OAS30Pointer<PathItemSource>;
 
 pub struct OAS30ParametersRef {}
 
-fn extract_parameter(
-    parameters: &mut Vec<OAS30Parameter>,
-    location: ParameterLocation,
-    data: &openapiv3::ParameterData,
-    openapi: Rc<OpenAPI>,
-) {
-    let param_name = data.name.clone();
-    let schema = match &data.format {
-        openapiv3::ParameterSchemaOrContent::Schema(schema_ref) => Some(schema_ref.clone()),
-        openapiv3::ParameterSchemaOrContent::Content(_) => None,
-    };
-    parameters.push(OAS30Parameter {
-        param_name,
-        location,
-        schema,
-        openapi,
-    });
-}
-
 fn to_parameters_iter(
     oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,
     openapi: Rc<OpenAPI>,
-) -> impl Iterator<Item = impl Parameter> {
+    parameter_source_factory: impl Fn(ParameterLocalId) -> ParameterSource,
+) -> impl Iterator<Item = RefOr<impl Parameter>> {
     let mut params = Vec::new();
     for param_ref in oas30_parameters {
-        match param_ref {
-            ReferenceOr::Item(param) => match param {
-                openapiv3::Parameter::Query { parameter_data, .. } => extract_parameter(
-                    &mut params,
-                    ParameterLocation::Query,
-                    parameter_data,
-                    openapi.clone(),
-                ),
-                openapiv3::Parameter::Header { parameter_data, .. } => extract_parameter(
-                    &mut params,
-                    ParameterLocation::Header,
-                    parameter_data,
-                    openapi.clone(),
-                ),
-                openapiv3::Parameter::Path { parameter_data, .. } => extract_parameter(
-                    &mut params,
-                    ParameterLocation::Path,
-                    parameter_data,
-                    openapi.clone(),
-                ),
-                openapiv3::Parameter::Cookie { parameter_data, .. } => extract_parameter(
-                    &mut params,
-                    ParameterLocation::Cookie,
-                    parameter_data,
-                    openapi.clone(),
-                ),
-            },
-            _ => (),
-        }
+        let p = match param_ref {
+            ReferenceOr::Item(param) => {
+                let param_id = ParameterLocalId {
+                    location: extract_location(&param),
+                    param_name: param.parameter_data_ref().name.clone(),
+                };
+                let ref_source = parameter_source_factory(param_id);
+                RefOr::Object(OAS30ParameterPointer {
+                    openapi: openapi.clone(),
+                    ref_source,
+                })
+            }
+            ReferenceOr::Reference { reference } => RefOr::Reference(OAS30ParameterReference {
+                openapi: openapi.clone(),
+                uri: reference.clone(),
+            }),
+        };
+        params.push(p);
     }
     params.into_iter()
 }
+/*
+match param {
+    openapiv3::Parameter::Query { parameter_data, .. } => extract_parameter(
+        &mut params,
+        ParameterLocation::Query,
+        parameter_data,
+        openapi.clone(),
+    ),
+    openapiv3::Parameter::Header { parameter_data, .. } => extract_parameter(
+        &mut params,
+        ParameterLocation::Header,
+        parameter_data,
+        openapi.clone(),
+    ),
+    openapiv3::Parameter::Path { parameter_data, .. } => extract_parameter(
+        &mut params,
+        ParameterLocation::Path,
+        parameter_data,
+        openapi.clone(),
+    ),
+    openapiv3::Parameter::Cookie { parameter_data, .. } => extract_parameter(
+        &mut params,
+        ParameterLocation::Cookie,
+        parameter_data,
+        openapi.clone(),
+    ),
+},
+_ => (),
+ */
 
 impl OAS30Source for PathItemSource {
     type OAS30Type = openapiv3::PathItem;
@@ -727,15 +757,20 @@ impl PathItem for OAS30PathItemPointer {
         })
     }
 
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.inner().parameters, self.openapi.clone())
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>> {
+        to_parameters_iter(&self.inner().parameters, self.openapi.clone(), |param_id| {
+            ParameterSource::PathItem {
+                source_ref: self.ref_source.clone(),
+                param_id,
+            }
+        })
     }
 }
 
 // OAS30 Operation Implementation
 type OAS30OperationPointer = OAS30Pointer<OperationSource>;
 
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Hash, Clone)]
 pub struct OperationSource {
     path_item: OAS30PathItemPointer,
     method: http::Method,
@@ -766,8 +801,14 @@ impl OAS30Source for OperationSource {
 }
 
 impl Operation for OAS30OperationPointer {
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.inner().parameters, self.openapi.clone())
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>> {
+        let source_ref = &self.ref_source;
+        to_parameters_iter(&self.inner().parameters, self.openapi.clone(), |param_id| {
+            ParameterSource::Operation {
+                source_ref: source_ref.clone(),
+                param_id,
+            }
+        })
     }
 
     fn operation_id(&self) -> Option<&str> {
@@ -776,24 +817,104 @@ impl Operation for OAS30OperationPointer {
 }
 
 // OAS30 Parameter Implementation
-pub struct OAS30Parameter {
+type OAS30ParameterPointer = OAS30Pointer<ParameterSource>;
+
+#[derive(Clone, Debug, Hash, PartialEq)]
+struct ParameterLocalId {
     param_name: String,
     location: ParameterLocation,
-    schema: Option<openapiv3::ReferenceOr<openapiv3::Schema>>,
-    openapi: Rc<OpenAPI>,
 }
 
-impl Parameter for OAS30Parameter {
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParameterSource {
+    Uri {
+        openapi: Rc<openapiv3::OpenAPI>,
+        uri: String,
+    },
+    Operation {
+        source_ref: OperationSource,
+        param_id: ParameterLocalId,
+    },
+    PathItem {
+        source_ref: PathItemSource,
+        param_id: ParameterLocalId,
+    },
+}
+impl Hash for ParameterSource {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+    }
+}
+
+fn extract_location(param: &openapiv3::Parameter) -> ParameterLocation {
+    match param {
+        openapiv3::Parameter::Query { .. } => ParameterLocation::Query,
+        openapiv3::Parameter::Header { .. } => ParameterLocation::Header,
+        openapiv3::Parameter::Path { .. } => ParameterLocation::Path,
+        openapiv3::Parameter::Cookie { .. } => ParameterLocation::Cookie,
+    }
+}
+
+impl ParameterSource {
+    fn extract_param<'a>(
+        params: &'a Vec<ReferenceOr<openapiv3::Parameter>>,
+        param_id: &ParameterLocalId,
+    ) -> &'a openapiv3::Parameter {
+        params
+            .iter()
+            .find(|p| {
+                let p = p.as_item().unwrap();
+                let loc = extract_location(p);
+                let pd = p.parameter_data_ref();
+                pd.name == param_id.param_name && loc == param_id.location
+            })
+            .unwrap()
+            .as_item()
+            .unwrap()
+    }
+}
+
+impl OAS30Source for ParameterSource {
+    type OAS30Type = openapiv3::Parameter;
+
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        match self {
+            ParameterSource::Uri { openapi, uri } => openapi.resolve_reference(uri).unwrap(),
+            ParameterSource::Operation {
+                source_ref,
+                param_id,
+            } => Self::extract_param(&source_ref.inner(openapi).parameters, param_id),
+            ParameterSource::PathItem {
+                source_ref,
+                param_id,
+            } => Self::extract_param(&source_ref.inner(openapi).parameters, param_id),
+        }
+    }
+}
+
+impl ByReference for OAS30ParameterPointer {
+    type Reference = OAS30ParameterReference;
+}
+impl Parameter for OAS30ParameterPointer {
     fn in_(&self) -> ParameterLocation {
-        self.location
+        extract_location(self.ref_source.inner(&self.openapi))
     }
 
     fn name(&self) -> &str {
-        &self.param_name
+        &self
+            .ref_source
+            .inner(&self.openapi)
+            .parameter_data_ref()
+            .name
     }
 
     fn schema(&self) -> Option<impl Schema> {
-        if let Some(schema_ref) = &self.schema {
+        if let ParameterSchemaOrContent::Schema(schema_ref) =
+            &self.inner().parameter_data_ref().format
+        {
             match schema_ref {
                 ReferenceOr::Reference { reference } => {
                     let schema_name = reference
@@ -1050,7 +1171,7 @@ fn test_path_parameters_impl(spec: impl Spec) {
     assert_eq!(path_params.len(), 1, "Path should have one parameter");
 
     // Verify path parameter properties: name and location
-    let param = &path_params[0];
+    let param = &path_params[0].resolve();
     assert_eq!(param.name(), "bar_name");
     assert_eq!(param.in_(), ParameterLocation::Path);
 
@@ -1075,7 +1196,7 @@ fn test_path_parameters_impl(spec: impl Spec) {
     );
 
     // Verify operation parameter properties: name and location (query vs path)
-    let param = &get_params[0];
+    let param = &get_params[0].as_object().unwrap();
     assert_eq!(param.name(), "with_foo");
     assert_eq!(param.in_(), ParameterLocation::Query);
 }

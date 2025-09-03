@@ -116,18 +116,18 @@ pub trait PathItem {
     // see 'get', 'put', ... in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
     fn operations_iter(&self) -> impl Iterator<Item = (http::Method, impl Operation)>;
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter>;
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>>;
 }
 
 // see https://spec.openapis.org/oas/v3.0.4.html#x4-7-10
 pub trait Operation {
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter>;
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>>;
     fn operation_id(&self) -> Option<&str>;
 }
 
 /// https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-1-parameter-locations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum ParameterLocation {
     Query,
     Header,
@@ -136,7 +136,7 @@ pub enum ParameterLocation {
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-parameter-object
-pub trait Parameter {
+pub trait Parameter: ByReference + Clone {
     /// see https://spec.openapis.org/oas/v3.0.4.html#parameter-in
     fn in_(&self) -> ParameterLocation;
     fn name(&self) -> &str;
@@ -162,23 +162,30 @@ pub trait ByReference: Sized {
     type Reference: Reference<Self>;
 }
 
-pub enum RefOr<T>
+pub enum RefOr<O>
 where
-    T: ByReference,
+    O: ByReference,
 {
-    Reference(T::Reference),
-    Object(T),
+    Reference(O::Reference),
+    Object(O),
 }
 
-impl<T> RefOr<T>
+impl<O> RefOr<O>
 where
-    T: ByReference,
-    T: Clone,
+    O: ByReference,
+    O: Clone,
 {
-    pub fn resolve(&self) -> T {
+    pub fn resolve(&self) -> O {
         match self {
             RefOr::Reference(r) => r.resolve(),
             RefOr::Object(o) => o.clone(),
+        }
+    }
+
+    pub fn as_object(&self) -> Option<O> {
+        match self {
+            RefOr::Reference(_) => None,
+            RefOr::Object(o) => Some(o.clone()),
         }
     }
 }
