@@ -1,10 +1,6 @@
 use anyhow::anyhow;
 use proc_macro2::TokenStream;
-use std::{
-    collections::{HashMap, HashSet},
-    io::Read,
-    path::Path,
-};
+use std::{collections::HashMap, io::Read, path::Path};
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
@@ -91,7 +87,7 @@ fn populate_types(
                     .expect("URI does not end in type name separated by '/'");
                 let alias_name = translate::schema_to_rust_typename(&name);
                 let target = mapping.get(target_name).expect("type not found for schema");
-                m.insert_type_alias(&alias_name, target.clone());
+                m.insert_type_alias(&alias_name, target.clone())?;
             }
             types::RefOr::Object(schema) => {
                 let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
