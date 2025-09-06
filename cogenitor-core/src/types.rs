@@ -1,4 +1,3 @@
-use http::Uri;
 use std::{collections::HashMap, io, str::FromStr};
 
 use json::JsonValue;
@@ -145,8 +144,6 @@ pub trait Parameter: ByReference + Clone {
     /// - so only either one of them can be `None`
     fn schema(&self) -> Option<impl Schema>;
 }
-
-struct OASPath {}
 
 /// types implementing Reference contain the path in the OAS tree
 /// as well as the means necessary to resolve that path
