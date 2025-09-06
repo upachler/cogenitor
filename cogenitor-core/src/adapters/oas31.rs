@@ -475,7 +475,7 @@ impl crate::Spec for OAS31Spec {
             })
             .unwrap_or_default();
 
-        PathIterator { paths, current: 0 }
+        PathIterator { paths, current: 0, spec: self.spec.clone() }
     }
 
     fn components(&self) -> Option<impl Components> {
@@ -528,6 +528,7 @@ impl Iterator for SchemaIterator {
 struct PathIterator {
     paths: Vec<(String, oas3::spec::PathItem)>,
     current: usize,
+    spec: Rc<oas3::spec::Spec>,
 }
 
 impl Iterator for PathIterator {
@@ -540,6 +541,7 @@ impl Iterator for PathIterator {
                 path.clone(),
                 OAS31PathItem {
                     path_item: path_item.clone(),
+                    spec: self.spec.clone(),
                 },
             ));
         }
@@ -550,49 +552,218 @@ impl Iterator for PathIterator {
 // OAS31 PathItem Implementation
 pub struct OAS31PathItem {
     path_item: oas3::spec::PathItem,
+    spec: Rc<oas3::spec::Spec>,
 }
 
 fn extract_operation(
     operations: &mut Vec<(Method, OAS31Operation)>,
     method: http::Method,
     opt_op: &Option<oas3::spec::Operation>,
+    spec: Rc<oas3::spec::Spec>,
 ) {
     if let Some(op) = opt_op {
         operations.push((
             method,
             OAS31Operation {
                 operation: op.clone(),
+                spec: spec.clone(),
             },
         ));
     }
 }
 
-fn extract_parameter(
-    parameters: &mut Vec<OAS31Parameter>,
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub struct ParameterLocalId {
+    param_name: String,
     location: ParameterLocation,
-    param: &oas3::spec::Parameter,
-) {
-    let param_name = param.name.clone();
-    parameters.push(OAS31Parameter {
-        param_name,
-        location,
-    });
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParameterSource {
+    Uri {
+        spec: Rc<oas3::spec::Spec>,
+        uri: String,
+    },
+    Operation {
+        spec: Rc<oas3::spec::Spec>,
+        param_id: ParameterLocalId,
+    },
+    PathItem {
+        spec: Rc<oas3::spec::Spec>,
+        param_id: ParameterLocalId,
+    },
+}
+
+impl Hash for ParameterSource {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+    }
+}
+
+pub struct OAS31ParameterPointer {
+    spec: Rc<oas3::spec::Spec>,
+    ref_source: ParameterSource,
+}
+
+impl Clone for OAS31ParameterPointer {
+    fn clone(&self) -> Self {
+        Self {
+            spec: self.spec.clone(),
+            ref_source: self.ref_source.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for OAS31ParameterPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAS31ParameterPointer")
+            .field("ref_source", &self.ref_source)
+            .finish()
+    }
+}
+
+impl Hash for OAS31ParameterPointer {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.ref_source.hash(state);
+    }
+}
+
+impl PartialEq for OAS31ParameterPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.ref_source == other.ref_source
+    }
+}
+
+impl Eq for OAS31ParameterPointer {}
+
+impl ByReference for OAS31ParameterPointer {
+    type Reference = OAS31ParameterReference;
+}
+
+impl Parameter for OAS31ParameterPointer {
+    fn in_(&self) -> ParameterLocation {
+        // For now, extract location from the parameter source
+        match &self.ref_source {
+            ParameterSource::Uri { .. } => {
+                // Would need to resolve the reference to get the actual parameter
+                todo!("URI parameter location extraction not implemented")
+            }
+            ParameterSource::Operation { param_id, .. } => param_id.location,
+            ParameterSource::PathItem { param_id, .. } => param_id.location,
+        }
+    }
+
+    fn name(&self) -> &str {
+        // For now, extract name from the parameter source
+        match &self.ref_source {
+            ParameterSource::Uri { .. } => {
+                // Would need to resolve the reference to get the actual parameter
+                todo!("URI parameter name extraction not implemented")
+            }
+            ParameterSource::Operation { param_id, .. } => &param_id.param_name,
+            ParameterSource::PathItem { param_id, .. } => &param_id.param_name,
+        }
+    }
+
+    fn schema(&self) -> Option<impl Schema> {
+        // For now, return None - this would need proper implementation
+        // to extract schema from the actual parameter
+        Option::<OAS31SchemaPointer>::None
+    }
+}
+
+fn extract_location(param: &oas3::spec::Parameter) -> ParameterLocation {
+    match param.location {
+        oas3::spec::ParameterIn::Query => ParameterLocation::Query,
+        oas3::spec::ParameterIn::Header => ParameterLocation::Header,
+        oas3::spec::ParameterIn::Path => ParameterLocation::Path,
+        oas3::spec::ParameterIn::Cookie => ParameterLocation::Cookie,
+    }
+}
+
+impl ParameterSource {
+    fn inner<'a>(&'a self, spec: &'a oas3::spec::Spec) -> &'a oas3::spec::Parameter {
+        match self {
+            ParameterSource::Uri { spec: _, uri } => {
+                // For now, assume it's a simple reference resolution
+                // This would need proper implementation based on how oas3 handles references
+                todo!("URI reference resolution not implemented")
+            }
+            ParameterSource::Operation { spec: _, param_id } => {
+                // Find parameter in operation - this is simplified
+                // Real implementation would need proper parameter lookup
+                todo!("Operation parameter lookup not implemented")
+            }
+            ParameterSource::PathItem { spec: _, param_id } => {
+                // Find parameter in path item - this is simplified
+                // Real implementation would need proper parameter lookup
+                todo!("PathItem parameter lookup not implemented")
+            }
+        }
+    }
+}
+
+pub struct OAS31ParameterReference {
+    spec: Rc<oas3::spec::Spec>,
+    uri: String,
+}
+
+impl Reference<OAS31ParameterPointer> for OAS31ParameterReference {
+    fn resolve(&self) -> OAS31ParameterPointer {
+        OAS31ParameterPointer {
+            spec: self.spec.clone(),
+            ref_source: ParameterSource::Uri {
+                spec: self.spec.clone(),
+                uri: self.uri.clone(),
+            },
+        }
+    }
+
+    fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl Reference<OAS31Parameter> for OAS31ParameterReference {
+    fn resolve(&self) -> OAS31Parameter {
+        // This is a simplified implementation for backward compatibility
+        // In practice, OAS31ParameterPointer should be used instead
+        OAS31Parameter {
+            param_name: "unknown".to_string(),
+            location: ParameterLocation::Query,
+        }
+    }
+
+    fn uri(&self) -> &str {
+        &self.uri
+    }
 }
 
 fn to_parameters_iter(
     oas31_parameters: &Vec<ObjectOrReference<oas3::spec::Parameter>>,
-) -> impl Iterator<Item = impl Parameter> {
+    spec: Rc<oas3::spec::Spec>,
+    parameter_source_factory: impl Fn(ParameterLocalId) -> ParameterSource,
+) -> impl Iterator<Item = RefOr<impl Parameter>> {
     let mut params = Vec::new();
     for param_ref in oas31_parameters {
-        if let ObjectOrReference::Object(param) = param_ref {
-            let location = match param.location {
-                oas3::spec::ParameterIn::Query => ParameterLocation::Query,
-                oas3::spec::ParameterIn::Header => ParameterLocation::Header,
-                oas3::spec::ParameterIn::Path => ParameterLocation::Path,
-                oas3::spec::ParameterIn::Cookie => ParameterLocation::Cookie,
-            };
-            extract_parameter(&mut params, location, param);
-        }
+        let p = match param_ref {
+            ObjectOrReference::Object(param) => {
+                let param_id = ParameterLocalId {
+                    location: extract_location(&param),
+                    param_name: param.name.clone(),
+                };
+                let ref_source = parameter_source_factory(param_id);
+                RefOr::Object(OAS31ParameterPointer {
+                    spec: spec.clone(),
+                    ref_source,
+                })
+            }
+            ObjectOrReference::Ref { ref_path } => RefOr::Reference(OAS31ParameterReference {
+                spec: spec.clone(),
+                uri: ref_path.clone(),
+            }),
+        };
+        params.push(p);
     }
     params.into_iter()
 }
@@ -601,31 +772,42 @@ impl PathItem for OAS31PathItem {
     fn operations_iter(&self) -> impl Iterator<Item = (Method, impl Operation)> {
         let mut operations = Vec::new();
 
-        extract_operation(&mut operations, Method::GET, &self.path_item.get);
-        extract_operation(&mut operations, Method::PUT, &self.path_item.put);
-        extract_operation(&mut operations, Method::POST, &self.path_item.post);
-        extract_operation(&mut operations, Method::DELETE, &self.path_item.delete);
-        extract_operation(&mut operations, Method::OPTIONS, &self.path_item.options);
-        extract_operation(&mut operations, Method::HEAD, &self.path_item.head);
-        extract_operation(&mut operations, Method::PATCH, &self.path_item.patch);
-        extract_operation(&mut operations, Method::TRACE, &self.path_item.trace);
+        extract_operation(&mut operations, Method::GET, &self.path_item.get, self.spec.clone());
+        extract_operation(&mut operations, Method::PUT, &self.path_item.put, self.spec.clone());
+        extract_operation(&mut operations, Method::POST, &self.path_item.post, self.spec.clone());
+        extract_operation(&mut operations, Method::DELETE, &self.path_item.delete, self.spec.clone());
+        extract_operation(&mut operations, Method::OPTIONS, &self.path_item.options, self.spec.clone());
+        extract_operation(&mut operations, Method::HEAD, &self.path_item.head, self.spec.clone());
+        extract_operation(&mut operations, Method::PATCH, &self.path_item.patch, self.spec.clone());
+        extract_operation(&mut operations, Method::TRACE, &self.path_item.trace, self.spec.clone());
 
         operations.into_iter()
     }
 
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.path_item.parameters)
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>> {
+        to_parameters_iter(&self.path_item.parameters, self.spec.clone(), |param_id| {
+            ParameterSource::PathItem {
+                spec: self.spec.clone(),
+                param_id,
+            }
+        })
     }
 }
 
 // OAS31 Operation Implementation
 pub struct OAS31Operation {
     operation: oas3::spec::Operation,
+    spec: Rc<oas3::spec::Spec>,
 }
 
 impl Operation for OAS31Operation {
-    fn parameters(&self) -> impl Iterator<Item = impl Parameter> {
-        to_parameters_iter(&self.operation.parameters)
+    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>> {
+        to_parameters_iter(&self.operation.parameters, self.spec.clone(), |param_id| {
+            ParameterSource::Operation {
+                spec: self.spec.clone(),
+                param_id,
+            }
+        })
     }
 
     fn operation_id(&self) -> Option<&str> {
@@ -633,10 +815,23 @@ impl Operation for OAS31Operation {
     }
 }
 
-// OAS31 Parameter Implementation
+// OAS31 Parameter Implementation - keeping for backward compatibility but not used anymore
 pub struct OAS31Parameter {
     param_name: String,
     location: ParameterLocation,
+}
+
+impl Clone for OAS31Parameter {
+    fn clone(&self) -> Self {
+        Self {
+            param_name: self.param_name.clone(),
+            location: self.location,
+        }
+    }
+}
+
+impl ByReference for OAS31Parameter {
+    type Reference = OAS31ParameterReference;
 }
 
 impl Parameter for OAS31Parameter {
@@ -756,8 +951,8 @@ paths:
         assert_eq!(parameters.len(), 1);
 
         let param = &parameters[0];
-        assert_eq!(param.name(), "id");
-        assert_eq!(param.in_(), ParameterLocation::Path);
+        assert_eq!(param.resolve().name(), "id");
+        assert_eq!(param.resolve().in_(), ParameterLocation::Path);
     }
 
     #[test]
@@ -928,8 +1123,8 @@ components:
             .unwrap();
         let params: Vec<_> = get_op.1.parameters().collect();
         assert_eq!(params.len(), 1);
-        assert_eq!(params[0].name(), "limit");
-        assert_eq!(params[0].in_(), ParameterLocation::Query);
+        assert_eq!(params[0].resolve().name(), "limit");
+        assert_eq!(params[0].resolve().in_(), ParameterLocation::Query);
 
         // Check /pets/{petId} path parameters
         let pet_id_path = paths
@@ -938,7 +1133,7 @@ components:
             .unwrap();
         let path_params: Vec<_> = pet_id_path.1.parameters().collect();
         assert_eq!(path_params.len(), 1);
-        assert_eq!(path_params[0].name(), "petId");
-        assert_eq!(path_params[0].in_(), ParameterLocation::Path);
+        assert_eq!(path_params[0].resolve().name(), "petId");
+        assert_eq!(path_params[0].resolve().in_(), ParameterLocation::Path);
     }
 }
