@@ -6,8 +6,8 @@ use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
-    codemodel::{function::FunctionBuilder, implementation::ImplementationBuilder},
-    types::{Operation, Parameter, PathItem, Reference},
+    codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
+    types::{MediaType, Operation, Parameter, PathItem, RefOr, Reference, RequestBody},
 };
 
 pub mod codemodel;
@@ -80,7 +80,7 @@ fn populate_types(
     for (name, schema) in spec.schemata_iter() {
         println!("creating type for schema '{name}");
         match schema {
-            types::RefOr::Reference(r) => {
+            RefOr::Reference(r) => {
                 let (_, target_name) = r
                     .uri()
                     .rsplit_once('/')
@@ -89,7 +89,7 @@ fn populate_types(
                 let target = mapping.get(target_name).expect("type not found for schema");
                 m.insert_type_alias(&alias_name, target.clone())?;
             }
-            types::RefOr::Object(schema) => {
+            RefOr::Object(schema) => {
                 let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
                 mapping.insert(name, type_ref);
             }
@@ -107,8 +107,9 @@ fn populate_types(
             println!("creating method for {method} {path}");
             client_impl = parse_path_into_impl_fn(
                 cm,
+                m,
                 client_impl,
-                &mapping,
+                &mut mapping,
                 &path,
                 &path_item,
                 method,
@@ -223,8 +224,9 @@ fn parse_schema(
 
 fn parse_path_into_impl_fn(
     cm: &mut Codemodel,
+    m: &mut Module,
     impl_builder: ImplementationBuilder,
-    mapping: &HashMap<String, TypeRef>,
+    mapping: &mut HashMap<String, TypeRef>,
     path_name: &str,
     path_item: &impl PathItem,
     method: http::Method,
@@ -254,33 +256,143 @@ fn parse_path_into_impl_fn(
             !shadowed
         })
         .collect::<Vec<_>>();
+
+    fn param_type_name_fn(param: &impl Parameter) -> String {
+        param.name().to_owned()
+    }
+
     for param in outer_params {
-        function = append_param(function, cm, mapping, &param.resolve())?;
+        function = append_param(
+            function,
+            cm,
+            m,
+            mapping,
+            &param.resolve(),
+            param_type_name_fn,
+        )?;
     }
 
     for param in path_op.parameters() {
-        function = append_param(function, cm, mapping, &param.resolve())?;
+        function = append_param(
+            function,
+            cm,
+            m,
+            mapping,
+            &param.resolve(),
+            param_type_name_fn,
+        )?;
     }
+
+    // add request body as function parameter if defined
+    if let Some(request_body) = path_op.request_body() {
+        // closure to build name from {operationFragment}Content pattern
+        // - called if needed.
+        let op_fragment_content_fn =
+            || translate::path_method_to_rust_type_name(method.clone(), path_name) + "Content";
+        let type_ref = map_content(
+            cm,
+            m,
+            mapping,
+            &request_body.resolve().content(),
+            op_fragment_content_fn,
+        )?;
+        let body_param_name = derive_function_param_name("body", &function);
+        function = function.param(body_param_name, type_ref);
+    }
+
     Ok(impl_builder.function(function.build()))
 }
 
-/// Append a parameter to the given FunctionBuilder, while respecting the
-fn append_param(
-    function: FunctionBuilder,
+fn map_content(
     cm: &mut Codemodel,
-    mapping: &HashMap<String, TypeRef>,
-    param: &impl Parameter,
-) -> anyhow::Result<FunctionBuilder> {
+    m: &mut Module,
+    mapping: &mut HashMap<String, TypeRef>,
+    content: &HashMap<String, impl MediaType>,
+    enum_name_fn: impl Fn() -> String,
+) -> anyhow::Result<TypeRef> {
+    let mapped_type;
+    match content.len() {
+        0 => mapped_type = cm.type_unit(),
+        1 => {
+            let (media_type_key, media_type) = content.iter().next().unwrap();
+            mapped_type = map_media_type(media_type_key, media_type);
+        }
+        _ => {
+            mapped_type = map_enum_from_content(cm, m, content, enum_name_fn)?;
+        }
+    };
+    Ok(mapped_type)
+}
+
+fn map_enum_from_content(
+    cm: &mut Codemodel,
+    m: &mut Module,
+    content: &HashMap<String, impl MediaType>,
+    enum_name_fn: impl Fn() -> String,
+) -> anyhow::Result<TypeRef> {
+    // TODO: disambiguate!
+    let enum_name = enum_name_fn();
+    let mut e = EnumBuilder::new(&enum_name);
+
+    for (media_type_key, media_type) in content.iter() {
+        let variant_name = translate::media_type_range_to_rust_type_name(media_type_key);
+        let variant_type = map_media_type(media_type_key, media_type);
+        e = e.tuple_variant(&variant_name, vec![variant_type])?;
+    }
+
+    let e = e.build()?;
+    Ok(m.insert_enum(e)?)
+}
+
+fn map_media_type(media_type_key: &str, media_type: &impl MediaType) -> TypeRef {
+    match media_type.schema() {
+        Some(ro) => {
+            // TODO: This maps as inline types only.
+            match ro {
+                RefOr::Reference(reference) => todo!(),
+                RefOr::Object(media_type) => todo!(),
+            }
+        }
+        None => todo!("emit some type that implements Read<u8>, like BufRead<u8>, etc."),
+    }
+}
+
+fn derive_function_param_name(name_candidate: &str, function: &FunctionBuilder) -> String {
     let existing_names = function.param_names();
 
-    let mapped_name = translate::parameter_to_rust_fn_param(param.name());
-    let mapped_name = translate::uncollide(&existing_names, mapped_name);
+    let mapped_name = translate::parameter_to_rust_fn_param(name_candidate);
+    translate::uncollide(&existing_names, mapped_name)
+}
 
+/// Append a an OAS operation parameter as rust function parameter
+/// to the given FunctionBuilder, while respecting Rust
+/// conventions and naming uniqueness constraints. This may lead
+/// to different names than those in the spec.
+fn append_param<P: Parameter>(
+    function: FunctionBuilder,
+    cm: &mut Codemodel,
+    m: &mut Module,
+    mapping: &mut HashMap<String, TypeRef>,
+    param: &P,
+    param_content_type_name_fn: impl Fn(&P) -> String,
+) -> anyhow::Result<FunctionBuilder> {
+    let mapped_name = derive_function_param_name(param.name(), &function);
+
+    // TODO: params are incredibly complex in OAS. Currently we ignore most
+    // of this complexity, however, it may severely impact the way parameters
+    // are serialized. See the sections in the spec, starting from here:
+    // https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-2-2-fixed-fields-for-use-with-schema
     let mapped_type;
     if let Some(schema) = param.schema() {
         mapped_type = type_ref_of(cm, mapping, &schema)?;
+    } else if let Some(content) = param.content() {
+        let enum_content_type_name = || param_content_type_name_fn(param);
+        mapped_type = map_content(cm, m, mapping, &content, enum_content_type_name)?;
     } else {
-        todo!("implement handling of 'content' field in OAS parameter object");
+        return Err(anyhow!(
+            "invariant violated in OAS spec: parameter {} has neither 'schema' nor 'content' defined!",
+            param.name()
+        ));
     }
 
     // finally add parameter

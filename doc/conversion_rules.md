@@ -153,7 +153,15 @@ The enum is generated as follows:
 
 ### Media type content mapping <a name='media-type-content-mapping'>
 
-A response or a request body defined in OpenAPI may define schemata for one or more media types. Consider the following fragment:
+A Media type content Map is present in these places in OAS:
+* Parameter Object
+* Request Body Object
+* Response Body Object
+* Header Object
+
+For each of these, OAS defines a 'content' attribute, validated against a `Map[String,Media Type Object]`.
+
+For example, a response or a request body defined in OpenAPI may define schemata for one or more media types. Consider the following fragment:
 
 ```yaml
       responses:
@@ -170,19 +178,42 @@ A response or a request body defined in OpenAPI may define schemata for one or m
 
 Note that the example above is taken from the petstore example for OpenAPI which defines the same schema for the XML and JSON media types, but this may not be the case for other OpenAPI for other OpenAPI definitions.
 
-The type mapped to a response follows the following rules:
-* If a request body or response declaration does not have a `content` field or the content map is empty, the mapped type is the unit type `()`
-* If a request body or response declaration contains only one media type, the type representing the declaration is the type mapped for this media type's `schema` field.
-* If there is more than one media type object present, an enum is generated to distinguish between media types. The enum is generated according to the following rules:
-  - The name of the enum is depends on whether the content is present in a response or a request body declaration:
-    - For request body declarations, the enum's name is generated using the pattern {operationFragment}`Content`. So for `PUT /pet`, the enum will be called `PetPutContent`.
-    - For responses, the enum's name is generated using the pattern {operationFragment}{statusFragment}`Content`. For `PUT /pet`, {operationFragment} is `PetPut`. For the HTTP 200 example above, the {statusFragment} is `Ok200`. So the resulting name of the enum is `PetPutOk200Content`.
-  - For each media type, an enum variant is introduced. Media types are translated into Rust enum variant names by using the type and subtype and uppercasing each of their first characters. Then both are joint into a string (ignoring the '/' separator). Media type wildcard characters (`*`) present in the type or subtype are replaced by the string `Any`. So a media type `application/json` becomes an enum variant called `ApplicationJson`. A media type wildcard `text/*` will become `TextAny`. Non-alphabetic characters are removed.
-
-With the rules above, the example shown above will generate the following enum:
+The example shown above will generate the following enum:
 ```rust
 enum PetPutOk200Content {
     ApplicationJson(Pet),
     ApplicationXml(Pet),
 }
 ```
+
+#### Mapping content in Request Body Object or Response Object
+
+The type mapped to a response follows the following rules:
+* If a request body or response declaration does not have a `content` field or the content map is empty, the mapped type is the unit type `()`
+* Otherwise, the mapped type for the request or response is the type mapped via the `content` attribute.
+
+#### Mapping the content attribute
+
+* If the `content` map is empty, the mapped type is the unit type `()`
+* If the `content` map contains only one media type, the type representing the declaration is the type mapped for this media type (see below).
+* Otherwise, an enum is generated to distinguish between media types. The enum is generated according to the following rules:
+  - The name of the enum depends on where the `content` attribute appears (request body, response, ...). In general, the location of `content` produces a {prefix}. The pattern for the name is {prefix}`Content`.
+  - For each media type, an enum variant is introduced. Media types are translated into Rust enum variant names by using the type and subtype and uppercasing each of their first characters. Then both are joined into a string (ignoring the '/' separator). Media type wildcard characters (`*`) present in the type or subtype are replaced by the string `Any`. So a media type `application/json` becomes an enum variant called `ApplicationJson`. A media type wildcard `text/*` will become `TextAny`. Non-alphabetic characters are removed.
+  - The generated enum variants are generated as [tuple variants](https://doc.rust-lang.org/reference/items/enumerations.html#railroad-EnumItemTuple) with a single field. The field's type is the field mapped for this media type (see below)
+
+A single media type will be mapped to a type according to the following rules:
+* If the media type contains a `schema` field, the type mapped for this media type is the type mapped for this schema
+* Otherwise, a type implementing `std::io::Read` will be mapped. The idea is that, because the spec does not sufficiently specify what the content is, the client falls back to reading the content's binary representation
+
+If an enum is generated for the `content` propery, its name is created using the pattern {prefix}`Content`. {prefix} depends on the OAS object in which the `content` attribute is embedded:
+  - Request Body Object: {prefix} is the {operationFragment}. For `PUT /pet`, {operationFragment} is `PetPut`. So for `PUT /pet`, the enum will be called `PetPutContent`.
+  - Response Object:
+    - If the response is inlined, {prefix} is {operationFragment}{statusFragment}. For the HTTP 200 example above, the {statusFragment} is `Ok200`. So the resulting name of the enum is `PetPutOk200Content`.
+    - If the response is declared in `#/components/responses`, {prefix} is the local name of the Response Body Object
+  - Parameter Object:
+    - If the parameter is inlined (in an operation object, it only occurs there), {prefix} is {operationFragment}{paramName}. {paramName} is taken from the parameter objects's `name` property. For example the type name for the  `X-APIKey` header on `PUT /pet` will be `PetPutX_APIKeyContent` (not that X-APIKey translates to X_APIKey)
+    - If the parameter is declared in `#/components/parameters`, {prefix} is the local name of the Parameter Object.
+  - TODO: Header Object
+
+
+TODO: Be more concrete in which type is mapped if there is no `schema`. In this case we may also think about providing more information, like HTTP headers, to provide additional information to API consumers. An alternative to providing a `std::io::Read` could be the underlying client's entire response object.

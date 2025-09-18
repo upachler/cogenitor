@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use http::Method;
+
+use crate::types::PathItem;
+
 // Array of strict keywords (currently in use)
 const STRICT_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -14,10 +18,12 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "unsized", "virtual", "yield",
 ];
 
+/// Makes first character of the given string uppercase and returns the result
 fn capitalize(s: &str) -> String {
     modify_first_char(s, char::to_uppercase)
 }
 
+/// Makes first character of the given string lowercase and returns the result
 fn decapitalize(s: &str) -> String {
     modify_first_char(s, char::to_lowercase)
 }
@@ -64,16 +70,16 @@ fn avoid_reserved(s: &str) -> String {
 /// otherwise yield _foo__bar, but are converted to foo_bar)
 pub(crate) fn path_method_to_rust_fn_name(
     method: &http::Method,
-    name: &str,
+    path: &str,
 ) -> anyhow::Result<String> {
     // Convert HTTP method to lowercase
     let method_str = method.as_str().to_lowercase();
 
     // Clean up the path name
-    let cleaned_path = name
+    let cleaned_path = path
         // Remove leading slash if present
         .strip_prefix('/')
-        .unwrap_or(name)
+        .unwrap_or(path)
         // Replace non-identifier characters with underscores
         .chars()
         .map(|c| {
@@ -101,6 +107,43 @@ pub(crate) fn path_method_to_rust_fn_name(
 
     // Ensure the function name doesn't conflict with Rust keywords
     Ok(avoid_reserved(&function_name))
+}
+
+/// converts paths and methods like 'GET /foo/bar' into type names such as
+///
+pub(crate) fn path_method_to_rust_type_name(method: http::Method, path: &str) -> String {
+    let (l, r) = method.as_str().split_at(1);
+    let method_str = l.to_uppercase() + &r.to_lowercase();
+
+    let path_rump: String = path
+        .strip_prefix("/")
+        .unwrap_or(path)
+        .split("/")
+        .map(|s| {
+            s.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        })
+        .map(|s| capitalize(&s))
+        .collect();
+
+    path_rump + &method_str
+}
+
+pub(crate) fn media_type_range_to_rust_type_name(media_type_key: &str) -> String {
+    media_type_key
+        .replace("*", "Any")
+        .splitn(2, "/")
+        .into_iter()
+        .map(|s| capitalize(s))
+        .map(|s| s.chars().filter(|c| c.is_alphabetic()).collect::<String>())
+        .collect()
 }
 
 pub trait ContainsPredicate {

@@ -65,7 +65,7 @@ Represents a schema for validating a JSON data item.
 We use this for type generation, so only fields relevant for this purpose are implemented.
 See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
-pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq + ByReference {
+pub trait Schema: Clone + std::fmt::Debug + /*std::hash::Hash + Eq + */ ByReference {
     /**
     If this schema is named (i.e. a YAML/JSON key is associated with its definition),
     this method returns that name.
@@ -97,6 +97,7 @@ pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq + ByReference {
     fn enum_(&self) -> Option<Vec<JsonValue>>;
 
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.16 */
+    // TODO: change 'impl Schema' to RefOr<impl Schema>
     fn properties(&self) -> HashMap<String, impl Schema>;
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.17 */
     fn pattern_properties(&self) -> HashMap<String, impl Schema>;
@@ -123,6 +124,7 @@ pub trait Operation {
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
     fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>>;
     fn operation_id(&self) -> Option<&str>;
+    fn request_body(&self) -> Option<RefOr<impl RequestBody>>;
 }
 
 /// https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-1-parameter-locations
@@ -143,6 +145,19 @@ pub trait Parameter: ByReference + Clone {
     /// `Parameter` must either contain a `schema` or a `content` field
     /// - so only either one of them can be `None`
     fn schema(&self) -> Option<impl Schema>;
+
+    fn content(&self) -> Option<HashMap<String, impl MediaType>>;
+}
+
+/// see https://spec.openapis.org/oas/v3.0.4.html#request-body-object
+pub trait RequestBody: ByReference + Clone {
+    fn content(&self) -> HashMap<String, impl MediaType>;
+    fn required(&self) -> bool;
+}
+
+/// see https://spec.openapis.org/oas/v3.0.4.html#media-type-object
+pub trait MediaType {
+    fn schema(&self) -> Option<RefOr<impl Schema>>;
 }
 
 /// types implementing Reference contain the path in the OAS tree

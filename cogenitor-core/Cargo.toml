@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 http.workspace = true
+indexmap = "2.11.1"
 json = "0.12.4"
 lazy_static = "1.5.0"
 oas3 = "0.13.0"
