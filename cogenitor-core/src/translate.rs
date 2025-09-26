@@ -1,9 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use http::Method;
-
-use crate::types::PathItem;
-
 // Array of strict keywords (currently in use)
 const STRICT_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",

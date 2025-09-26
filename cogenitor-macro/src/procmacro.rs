@@ -1,7 +1,6 @@
-use anyhow::anyhow;
-use cogenitor_core::adapters::oas30::OAS30Spec;
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{ToTokens, quote};
+use cogenitor_core::{ApiConfig, adapters::oas30::OAS30Spec};
+use proc_macro2::{Span, TokenStream};
+use quote::ToTokens;
 
 use syn::{
     Expr, ExprLit, LitStr, MetaNameValue,
@@ -11,13 +10,10 @@ use syn::{
     token::Comma,
 };
 
-// Structure to hold key-value pair arguments
+// wrapper struct holding ApiConfig, but is parseable
 #[derive(Default, Debug, PartialEq)]
-pub struct ApiConfig {
-    path: Option<String>,
-    traits: bool,
-    types: bool,
-    module_name: Option<String>,
+pub struct MacroConfig {
+    pub inner: ApiConfig,
 }
 
 trait ExprInto<T> {
@@ -52,9 +48,10 @@ impl ExprInto<bool> for Expr {
     }
 }
 
-impl Parse for ApiConfig {
+impl Parse for MacroConfig {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut config = Self::default();
+        let mut macro_config = Self::default();
+        let config = &mut macro_config.inner;
 
         // Parse key-value pairs
         let kv_pairs = Punctuated::<MetaNameValue, Comma>::parse_terminated(input)?;
@@ -97,22 +94,13 @@ impl Parse for ApiConfig {
             }
         }
 
-        Ok(config)
-    }
-}
-
-impl ApiConfig {
-    pub fn new_from_path(path: String) -> Self {
-        Self {
-            path: Some(path),
-            ..Self::default()
-        }
+        Ok(macro_config)
     }
 }
 
 // Main macro implementation
-pub(super) fn generate_code(config: ApiConfig) -> TokenStream {
-    match generate_code_impl(config) {
+pub(super) fn generate_macro_code(config: ApiConfig) -> TokenStream {
+    match cogenitor_core::generate_mod::<OAS30Spec>(config) {
         Ok(ts) => ts,
         Err(e) => match e.downcast_ref::<syn::Error>() {
             Some(e) => e.to_compile_error(),
@@ -124,32 +112,6 @@ pub(super) fn generate_code(config: ApiConfig) -> TokenStream {
     }
 }
 
-fn generate_code_impl(config: ApiConfig) -> anyhow::Result<TokenStream> {
-    let module_name = config
-        .module_name
-        .unwrap_or_else(|| "generated_api".to_string());
-    let module_ident = Ident::new(&module_name, proc_macro2::Span::call_site());
-
-    let path = config
-        .path
-        .ok_or(anyhow!("no path to OpenAPI file specified"))?;
-    let path = std::path::Path::new(&path);
-    let types = cogenitor_core::generate_from_path::<OAS30Spec>(path)?;
-
-    let ts = quote! {
-        pub mod #module_ident {
-            #![allow(unused_imports)]
-
-            use std::path::Path;
-
-            #types
-        }
-    }
-    .into();
-
-    Ok(ts)
-}
-
 pub(crate) fn parse_config(input: TokenStream) -> syn::Result<ApiConfig> {
     // Handle single argument case
     let config;
@@ -157,10 +119,8 @@ pub(crate) fn parse_config(input: TokenStream) -> syn::Result<ApiConfig> {
         config = ApiConfig::new_from_path(path.value());
     } else {
         // Handle key-value pairs case
-        match syn::parse2(input) {
-            Ok(cfg) => config = cfg,
-            Err(e) => return Err(e),
-        }
+        let macro_config: MacroConfig = syn::parse2(input)?;
+        config = macro_config.inner;
     }
     Ok(config)
 }

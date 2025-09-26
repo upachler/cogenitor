@@ -201,7 +201,7 @@ where
     pub fn resolve(&self) -> RefOr<O> {
         match self {
             RefOr::Reference(r) => r.resolve(),
-            RefOr::Object(o) => (*self).clone(),
+            RefOr::Object(_o) => (*self).clone(),
         }
     }
 

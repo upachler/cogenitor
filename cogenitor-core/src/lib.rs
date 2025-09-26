@@ -1,13 +1,15 @@
 use anyhow::anyhow;
 use proc_macro2::TokenStream;
+use quote::quote;
 use std::{collections::HashMap, io::Read, path::Path};
+use syn::Ident;
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
     codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
-    types::{MediaType, Operation, Parameter, PathItem, RefOr, Reference, RequestBody},
+    types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody},
 };
 
 pub mod codemodel;
@@ -17,18 +19,62 @@ mod types;
 
 pub mod adapters;
 
-pub fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<TokenStream> {
+// Structure to hold key-value pair arguments
+#[derive(Default, Debug, PartialEq)]
+pub struct ApiConfig {
+    pub path: Option<String>,
+    pub traits: bool,
+    pub types: bool,
+    pub module_name: Option<String>,
+}
+
+impl ApiConfig {
+    pub fn new_from_path(path: String) -> Self {
+        Self {
+            path: Some(path),
+            ..Self::default()
+        }
+    }
+}
+
+pub fn generate_mod<S: Spec>(config: ApiConfig) -> anyhow::Result<TokenStream> {
+    let module_name = config
+        .module_name
+        .unwrap_or_else(|| "generated_api".to_string());
+    let module_ident = Ident::new(&module_name, proc_macro2::Span::call_site());
+
+    let path = config
+        .path
+        .ok_or(anyhow!("no path to OpenAPI file specified"))?;
+    let path = std::path::Path::new(&path);
+    let types = generate_from_path::<S>(path)?;
+
+    let ts = quote! {
+        pub mod #module_ident {
+            #![allow(unused_imports)]
+
+            use std::path::Path;
+
+            #types
+        }
+    }
+    .into();
+
+    Ok(ts)
+}
+
+fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<TokenStream> {
     let mut file = std::fs::File::open(path)?;
 
     generate_from_reader::<S>(&mut file)
 }
 
-pub fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
+fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
     let spec = S::from_str(s)?;
     generate_code(&spec)
 }
 
-pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<TokenStream> {
+fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<TokenStream> {
     let spec = S::from_reader(input)?;
     generate_code(&spec)
 }

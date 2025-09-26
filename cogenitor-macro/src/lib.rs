@@ -10,5 +10,5 @@ pub fn generate_api(input: TokenStream) -> TokenStream {
         Ok(config) => config,
         Err(e) => return e.to_compile_error().into(),
     };
-    procmacro::generate_code(config).into()
+    procmacro::generate_macro_code(config).into()
 }
