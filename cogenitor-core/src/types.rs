@@ -5,18 +5,24 @@ use json::JsonValue;
 /** An implementation of an OAS spec, specific to our needs for code generation */
 pub trait Spec: FromStr<Err = anyhow::Error> {
     type Schema: Schema;
+    type Components: Components<Self>;
+    type PathItem: PathItem<Self>;
+    type Parameter: Parameter<Self>;
+    type MediaType: MediaType<Self>;
+    type Operation: Operation<Self>;
+    type RequestBody: RequestBody<Self>;
 
     fn from_reader(r: impl io::Read) -> anyhow::Result<impl Spec>;
 
-    fn components(&self) -> Option<impl Components>;
+    fn components(&self) -> Option<Self::Components>;
 
-    fn paths(&self) -> impl Iterator<Item = (String, impl PathItem)>;
+    fn paths(&self) -> impl Iterator<Item = (String, Self::PathItem)>;
 
-    fn schemata_iter(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)>;
+    fn schemata_iter(&self) -> impl Iterator<Item = (String, RefOr<Self::Schema>)>;
 }
 
-pub trait Components {
-    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<impl Schema>)>;
+pub trait Components<S: Spec> {
+    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<S::Schema>)>;
 }
 
 /**
@@ -65,7 +71,7 @@ Represents a schema for validating a JSON data item.
 We use this for type generation, so only fields relevant for this purpose are implemented.
 See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
-pub trait Schema: Clone + std::fmt::Debug + /*std::hash::Hash + Eq + */ ByReference {
+pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq + ByReference {
     /**
     If this schema is named (i.e. a YAML/JSON key is associated with its definition),
     this method returns that name.
@@ -98,9 +104,9 @@ pub trait Schema: Clone + std::fmt::Debug + /*std::hash::Hash + Eq + */ ByRefere
 
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.16 */
     // TODO: change 'impl Schema' to RefOr<impl Schema>
-    fn properties(&self) -> HashMap<String, impl Schema>;
+    fn properties(&self) -> HashMap<String, RefOr<Self>>;
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.17 */
-    fn pattern_properties(&self) -> HashMap<String, impl Schema>;
+    fn pattern_properties(&self) -> HashMap<String, RefOr<impl Schema>>;
     /** https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.18 */
     fn addtional_properties(&self) -> BooleanOrSchema<impl Schema>;
 
@@ -108,23 +114,23 @@ pub trait Schema: Clone + std::fmt::Debug + /*std::hash::Hash + Eq + */ ByRefere
     see 'items' following https://spec.openapis.org/oas/v3.0.4.html#x4-7-24-1-json-schema-keywords
     see https://datatracker.ietf.org/doc/html/draft-wright-json-schema-validation-00#section-5.9
     */
-    fn items(&self) -> Option<Vec<impl Schema>>;
+    fn items(&self) -> Option<Vec<RefOr<Self>>>;
 }
 
 // https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-operation-object
-pub trait PathItem {
+pub trait PathItem<S: Spec> {
     // see 'get', 'put', ... in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
-    fn operations_iter(&self) -> impl Iterator<Item = (http::Method, impl Operation)>;
+    fn operations_iter(&self) -> impl Iterator<Item = (http::Method, S::Operation)>;
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-9-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>>;
+    fn parameters(&self) -> impl Iterator<Item = RefOr<S::Parameter>>;
 }
 
 // see https://spec.openapis.org/oas/v3.0.4.html#x4-7-10
-pub trait Operation {
+pub trait Operation<S: Spec> {
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
-    fn parameters(&self) -> impl Iterator<Item = RefOr<impl Parameter>>;
+    fn parameters(&self) -> impl Iterator<Item = RefOr<S::Parameter>>;
     fn operation_id(&self) -> Option<&str>;
-    fn request_body(&self) -> Option<RefOr<impl RequestBody>>;
+    fn request_body(&self) -> Option<RefOr<S::RequestBody>>;
 }
 
 /// https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-1-parameter-locations
@@ -137,34 +143,37 @@ pub enum ParameterLocation {
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-parameter-object
-pub trait Parameter: ByReference + Clone {
+pub trait Parameter<S: Spec>: ByReference + Clone {
     /// see https://spec.openapis.org/oas/v3.0.4.html#parameter-in
     fn in_(&self) -> ParameterLocation;
     fn name(&self) -> &str;
 
     /// `Parameter` must either contain a `schema` or a `content` field
     /// - so only either one of them can be `None`
-    fn schema(&self) -> Option<impl Schema>;
+    fn schema(&self) -> Option<RefOr<S::Schema>>;
 
-    fn content(&self) -> Option<HashMap<String, impl MediaType>>;
+    fn content(&self) -> Option<HashMap<String, S::MediaType>>;
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#request-body-object
-pub trait RequestBody: ByReference + Clone {
-    fn content(&self) -> HashMap<String, impl MediaType>;
+pub trait RequestBody<S: Spec>: ByReference + Clone {
+    fn content(&self) -> HashMap<String, S::MediaType>;
     fn required(&self) -> bool;
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#media-type-object
-pub trait MediaType {
-    fn schema(&self) -> Option<RefOr<impl Schema>>;
+pub trait MediaType<S: Spec> {
+    fn schema(&self) -> Option<RefOr<S::Schema>>;
 }
 
 /// types implementing Reference contain the path in the OAS tree
 /// as well as the means necessary to resolve that path
-pub trait Reference<T> {
+pub trait Reference<T>: PartialEq + Eq + Clone + std::fmt::Debug
+where
+    T: ByReference,
+{
     /// resolve the URI to the actual target object
-    fn resolve(&self) -> T;
+    fn resolve(&self) -> RefOr<T>;
 
     /// the URI to resolve to the target object
     fn uri(&self) -> &str;
@@ -174,6 +183,7 @@ pub trait ByReference: Sized {
     type Reference: Reference<Self>;
 }
 
+#[derive(Clone, Debug)]
 pub enum RefOr<O>
 where
     O: ByReference,
@@ -185,13 +195,22 @@ where
 impl<O> RefOr<O>
 where
     O: ByReference,
+    <O as ByReference>::Reference: Clone,
     O: Clone,
 {
-    pub fn resolve(&self) -> O {
+    pub fn resolve(&self) -> RefOr<O> {
         match self {
             RefOr::Reference(r) => r.resolve(),
-            RefOr::Object(o) => o.clone(),
+            RefOr::Object(o) => (*self).clone(),
         }
+    }
+
+    pub fn resolve_fully(&self) -> O {
+        let mut ro = self.resolve();
+        while let RefOr::Reference(_) = &ro {
+            ro = ro.resolve()
+        }
+        ro.as_object().unwrap()
     }
 
     pub fn as_object(&self) -> Option<O> {
@@ -200,4 +219,34 @@ where
             RefOr::Object(o) => Some(o.clone()),
         }
     }
+}
+
+impl<O> std::hash::Hash for RefOr<O>
+where
+    O: ByReference,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+    }
+}
+
+impl<O: PartialEq> PartialEq for RefOr<O>
+where
+    O: ByReference,
+    O: Clone,
+{
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Reference(l0), Self::Reference(r0)) => l0 == r0,
+            (Self::Object(l0), Self::Object(r0)) => l0 == r0,
+            _ => false,
+        }
+    }
+}
+
+impl<O: Eq> Eq for RefOr<O>
+where
+    RefOr<O>: PartialEq,
+    O: ByReference,
+{
 }

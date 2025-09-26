@@ -33,7 +33,7 @@ pub fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<TokenSt
     generate_code(&spec)
 }
 
-fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping)> {
+fn build_codemodel<S: Spec>(spec: &S) -> anyhow::Result<(Codemodel, TypeMapping<S>)> {
     let mut cm = Codemodel::new();
 
     let mut m = Module::new("crate");
@@ -54,47 +54,66 @@ fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<TokenStream> {
 }
 
 /** Maps OpenAPI type names to actual Codemodel [TypeRef]s instances */
-struct TypeMapping {
-    mapping: HashMap<String, TypeRef>,
+struct TypeMapping<S: Spec> {
+    schema_mapping: HashMap<RefOr<S::Schema>, TypeRef>,
 }
 
-fn populate_types(
-    spec: &impl Spec,
+impl<S: Spec> TypeMapping<S> {
+    fn new() -> Self {
+        Self {
+            schema_mapping: HashMap::new(),
+        }
+    }
+}
+
+impl<S: Spec> std::fmt::Debug for TypeMapping<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypeMapping")
+            .field("schema_mapping", &self.schema_mapping)
+            .finish()
+    }
+}
+
+fn populate_types<S: Spec>(
+    spec: &S,
     cm: &mut Codemodel,
     m: &mut Module,
-) -> anyhow::Result<TypeMapping> {
-    let mut mapping = HashMap::new();
+) -> anyhow::Result<TypeMapping<S>> {
+    let mut mapping = TypeMapping::new();
 
     // in order to properly deal with cyclic data structures, we create
     // type stubs for all named schemata. This way, while constructing
     // a type from a schema, we can refer to another type that we
     // didn't construct yet.
-    for (name, _) in spec.schemata_iter() {
+    for (name, schema) in spec.schemata_iter() {
         let rust_name = translate::schema_to_rust_typename(&name);
         let type_ref = m.insert_type_stub(&rust_name)?;
-        mapping.insert(name, type_ref);
+        mapping.schema_mapping.insert(schema, type_ref);
     }
+
+    log::trace!("types stubs from schemas section constructed: {mapping:?}");
 
     // we now construct all types properly. When inserting them into
     // the module, stubs are replaced by proper types.
-    for (name, schema) in spec.schemata_iter() {
+    for (name, ro_schema) in spec.schemata_iter() {
         println!("creating type for schema '{name}");
-        match schema {
-            RefOr::Reference(r) => {
-                let (_, target_name) = r
-                    .uri()
-                    .rsplit_once('/')
-                    .expect("URI does not end in type name separated by '/'");
+        match &ro_schema {
+            RefOr::Reference(_) => {
                 let alias_name = translate::schema_to_rust_typename(&name);
-                let target = mapping.get(target_name).expect("type not found for schema");
+                let target = mapping
+                    .schema_mapping
+                    .get(&ro_schema.resolve())
+                    .expect("type not found for schema");
                 m.insert_type_alias(&alias_name, target.clone())?;
             }
             RefOr::Object(schema) => {
-                let type_ref = parse_schema(&schema, Some(name.clone()), cm, m, &mapping)?;
-                mapping.insert(name, type_ref);
+                let type_ref = parse_schema(schema, Some(name.clone()), cm, m, &mapping)?;
+                mapping.schema_mapping.insert(ro_schema, type_ref);
             }
         }
     }
+
+    log::trace!("types from schemas section constructed: {mapping:?}");
 
     let client_struct = StructBuilder::new("Client")
         .attr_with_input("derive", quote::quote!((Debug)))?
@@ -119,7 +138,7 @@ fn populate_types(
     }
     m.insert_implementation(client_impl.build())?;
 
-    Ok(TypeMapping { mapping })
+    Ok(mapping)
 }
 
 /** The rust type we're converting a JSON schema item into */
@@ -177,12 +196,12 @@ fn type_kind_of(schema: &impl Schema) -> anyhow::Result<TypeKind> {
     Ok(kind)
 }
 
-fn parse_schema(
-    schema: &impl Schema,
+fn parse_schema<S: Spec>(
+    schema: &S::Schema,
     name: Option<String>,
     cm: &mut Codemodel,
     m: &mut Module,
-    mapping: &HashMap<String, TypeRef>,
+    mapping: &TypeMapping<S>,
 ) -> anyhow::Result<TypeRef> {
     let kind = type_kind_of(schema)?;
 
@@ -202,6 +221,7 @@ fn parse_schema(
                 .unwrap();
             for (name, schema) in schema.properties() {
                 let rust_name = translate::property_to_rust_fieldname(&name);
+                let schema = schema.resolve();
                 let type_ref = type_ref_of(cm, mapping, &schema)?;
                 b = b.field(&rust_name, type_ref)?;
             }
@@ -222,15 +242,15 @@ fn parse_schema(
     }
 }
 
-fn parse_path_into_impl_fn(
+fn parse_path_into_impl_fn<S: Spec>(
     cm: &mut Codemodel,
     m: &mut Module,
     impl_builder: ImplementationBuilder,
-    mapping: &mut HashMap<String, TypeRef>,
+    mapping: &mut TypeMapping<S>,
     path_name: &str,
-    path_item: &impl PathItem,
+    path_item: &S::PathItem,
     method: http::Method,
-    path_op: &impl Operation,
+    path_op: &S::Operation,
 ) -> anyhow::Result<ImplementationBuilder> {
     let candidate_name = translate::path_method_to_rust_fn_name(&method, path_name)?;
 
@@ -247,29 +267,22 @@ fn parse_path_into_impl_fn(
     // we apply the non-shadowed of path_item first
     let outer_params = path_item
         .parameters()
+        .map(|param| param.resolve_fully())
         .filter(|param| {
-            let param = param.resolve();
-            let shadowed = path_op.parameters().any(|p| {
-                let p = p.resolve();
-                p.name() == param.name() && p.in_() == param.in_()
-            });
+            let shadowed = path_op
+                .parameters()
+                .map(|p| p.resolve_fully())
+                .any(|p| p.name() == param.name() && p.in_() == param.in_());
             !shadowed
         })
         .collect::<Vec<_>>();
 
-    fn param_type_name_fn(param: &impl Parameter) -> String {
+    fn param_type_name_fn<S: Spec>(param: &S::Parameter) -> String {
         param.name().to_owned()
     }
 
     for param in outer_params {
-        function = append_param(
-            function,
-            cm,
-            m,
-            mapping,
-            &param.resolve(),
-            param_type_name_fn,
-        )?;
+        function = append_param(function, cm, m, mapping, &param, param_type_name_fn::<S>)?;
     }
 
     for param in path_op.parameters() {
@@ -278,8 +291,8 @@ fn parse_path_into_impl_fn(
             cm,
             m,
             mapping,
-            &param.resolve(),
-            param_type_name_fn,
+            &param.resolve_fully(),
+            param_type_name_fn::<S>,
         )?;
     }
 
@@ -293,7 +306,7 @@ fn parse_path_into_impl_fn(
             cm,
             m,
             mapping,
-            &request_body.resolve().content(),
+            &request_body.resolve_fully().content(),
             op_fragment_content_fn,
         )?;
         let body_param_name = derive_function_param_name("body", &function);
@@ -303,11 +316,11 @@ fn parse_path_into_impl_fn(
     Ok(impl_builder.function(function.build()))
 }
 
-fn map_content(
+fn map_content<S: Spec>(
     cm: &mut Codemodel,
     m: &mut Module,
-    mapping: &mut HashMap<String, TypeRef>,
-    content: &HashMap<String, impl MediaType>,
+    mapping: &mut TypeMapping<S>,
+    content: &HashMap<String, S::MediaType>,
     enum_name_fn: impl Fn() -> String,
 ) -> anyhow::Result<TypeRef> {
     let mapped_type;
@@ -315,19 +328,20 @@ fn map_content(
         0 => mapped_type = cm.type_unit(),
         1 => {
             let (media_type_key, media_type) = content.iter().next().unwrap();
-            mapped_type = map_media_type(media_type_key, media_type);
+            mapped_type = map_media_type::<S>(cm, mapping, media_type_key, media_type);
         }
         _ => {
-            mapped_type = map_enum_from_content(cm, m, content, enum_name_fn)?;
+            mapped_type = map_enum_from_content::<S>(cm, m, mapping, content, enum_name_fn)?;
         }
     };
     Ok(mapped_type)
 }
 
-fn map_enum_from_content(
+fn map_enum_from_content<S: Spec>(
     cm: &mut Codemodel,
     m: &mut Module,
-    content: &HashMap<String, impl MediaType>,
+    mapping: &mut TypeMapping<S>,
+    content: &HashMap<String, S::MediaType>,
     enum_name_fn: impl Fn() -> String,
 ) -> anyhow::Result<TypeRef> {
     // TODO: disambiguate!
@@ -336,7 +350,7 @@ fn map_enum_from_content(
 
     for (media_type_key, media_type) in content.iter() {
         let variant_name = translate::media_type_range_to_rust_type_name(media_type_key);
-        let variant_type = map_media_type(media_type_key, media_type);
+        let variant_type = map_media_type::<S>(cm, mapping, media_type_key, media_type);
         e = e.tuple_variant(&variant_name, vec![variant_type])?;
     }
 
@@ -344,13 +358,18 @@ fn map_enum_from_content(
     Ok(m.insert_enum(e)?)
 }
 
-fn map_media_type(media_type_key: &str, media_type: &impl MediaType) -> TypeRef {
+fn map_media_type<S: Spec>(
+    cm: &mut Codemodel,
+    mapping: &TypeMapping<S>,
+    media_type_key: &str,
+    media_type: &S::MediaType,
+) -> TypeRef {
     match media_type.schema() {
-        Some(ro) => {
-            // TODO: This maps as inline types only.
-            match ro {
-                RefOr::Reference(reference) => todo!(),
-                RefOr::Object(media_type) => todo!(),
+        Some(schema) => {
+            let schema = schema.resolve();
+            match type_ref_of(cm, mapping, &schema).ok() {
+                Some(type_ref) => type_ref,
+                None => todo!(),
             }
         }
         None => todo!("emit some type that implements Read<u8>, like BufRead<u8>, etc."),
@@ -368,13 +387,13 @@ fn derive_function_param_name(name_candidate: &str, function: &FunctionBuilder) 
 /// to the given FunctionBuilder, while respecting Rust
 /// conventions and naming uniqueness constraints. This may lead
 /// to different names than those in the spec.
-fn append_param<P: Parameter>(
+fn append_param<S: Spec>(
     function: FunctionBuilder,
     cm: &mut Codemodel,
     m: &mut Module,
-    mapping: &mut HashMap<String, TypeRef>,
-    param: &P,
-    param_content_type_name_fn: impl Fn(&P) -> String,
+    mapping: &mut TypeMapping<S>,
+    param: &S::Parameter,
+    param_content_type_name_fn: impl Fn(&S::Parameter) -> String,
 ) -> anyhow::Result<FunctionBuilder> {
     let mapped_name = derive_function_param_name(param.name(), &function);
 
@@ -399,27 +418,40 @@ fn append_param<P: Parameter>(
     Ok(function.param(mapped_name, mapped_type))
 }
 
-fn type_ref_of(
+fn type_ref_of<S: Spec>(
     cm: &mut Codemodel,
-    mapping: &HashMap<String, TypeRef>,
-    schema: &impl Schema,
+    mapping: &TypeMapping<S>,
+    schema: &RefOr<S::Schema>,
 ) -> anyhow::Result<TypeRef> {
-    match schema.name() {
-        Some(name) => {
-            let type_ref = mapping
-                .get(name)
-                .ok_or_else(|| anyhow!("no mapping found for schema type {name}"))?;
-            Ok(type_ref.clone())
-        }
-        None => match &schema.type_() {
+    if let Some(type_ref) = mapping.schema_mapping.get(schema) {
+        // mapped type found for RefOr
+        return Ok(type_ref.clone());
+    }
+
+    // If we get there, there are only two options (assuming that we
+    // already mapped all types in #/components/schemas, which we should
+    // have before calling this function):
+    // * the schema is inlined (RefOr::Object) and hasn't been mapped yet
+    // * the schema is inlined and directly mapped to a primitive type
+    // * the schema is RefOr::Reference, whose URI points to a nonexisting
+    //   target (they should all exist because they should have been mapped
+    //   before, see above)
+
+    match schema {
+        RefOr::Reference(r) => Err(anyhow!(
+            "no mapping found for schema URI reference {schema:?}"
+        )),
+        RefOr::Object(schema) => match &schema.type_() {
             Some(types) => {
                 if types.len() != 1 {
+                    // violation of rules for 'type' keyword in
+                    // https://spec.openapis.org/oas/v3.0.4.html#schema-object
                     return Err(anyhow!(
                         "encountered schema with a type property that has zero or multiple types. It is expected to have exactly one"
                     ));
                 } else {
                     match types.get(0).unwrap() {
-                        types::Type::Null => todo!(),
+                        types::Type::Null => Ok(cm.type_unit()),
                         types::Type::Boolean => Ok(cm.type_bool()),
                         types::Type::Object => {
                             todo!(
@@ -427,9 +459,16 @@ fn type_ref_of(
                             )
                         }
                         types::Type::Array => {
-                            let items = schema.items().unwrap();
-                            let item_schema = items.get(0).unwrap();
-                            let item_type = type_ref_of(cm, mapping, item_schema).unwrap();
+                            // check for violations against rules for 'items' in
+                            // https://spec.openapis.org/oas/v3.0.4.html#schema-object
+                            let items = schema
+                                .items()
+                                .ok_or(anyhow!("'items' must be present when 'type' is 'array'"))?;
+                            if items.len() != 1 {
+                                return Err(anyhow!("'items' must contain exactly one schema"));
+                            }
+                            let item_schema = items.get(0).unwrap().resolve();
+                            let item_type = type_ref_of(cm, mapping, &item_schema).unwrap();
                             Ok(cm.type_instance(&cm.type_vec(), &vec![item_type]))
                         }
                         types::Type::Number => match schema.format() {
@@ -457,12 +496,15 @@ fn type_ref_of(
 #[cfg(test)]
 mod tests {
     use std::{io::Cursor, str::FromStr};
+    use test_log::test;
+    use types::Components;
 
     use crate::codemodel::{NamedItem, Scope, implementation::Implementation};
 
     use super::*;
 
     static PETSTORE_YAML: &[u8] = include_bytes!("../../test-data/petstore.yaml");
+
     #[test]
     fn test_oas_petstore() {
         let reader = Cursor::new(PETSTORE_YAML);
@@ -504,7 +546,13 @@ mod tests {
         let spec = adapters::oas30::OAS30Spec::from_str(oas)?;
         assert_eq!(1, spec.schemata_iter().count());
         let (cm, mapping) = super::build_codemodel(&spec)?;
-        assert!(mapping.mapping.contains_key("Pet"));
+        let pet = spec
+            .components()
+            .unwrap()
+            .schemas()
+            .find_map(|(name, schema)| if name.eq("Pet") { Some(schema) } else { None })
+            .unwrap();
+        assert!(mapping.schema_mapping.contains_key(&pet));
         let crate_ = cm.find_crate("crate").unwrap();
         let pet = crate_.find_type("Pet").unwrap();
         match &pet {
