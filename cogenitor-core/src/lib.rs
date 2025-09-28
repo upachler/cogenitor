@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use std::{
     collections::HashMap,
-    io::{BufReader, Read, Seek},
+    io::{BufReader, Cursor, Read, Seek},
     path::Path,
     ptr::read,
 };
@@ -44,7 +44,7 @@ impl ApiConfig {
     }
 }
 
-pub fn generate_mod<S: Spec>(config: ApiConfig) -> anyhow::Result<TokenStream> {
+pub fn generate_mod(config: ApiConfig) -> anyhow::Result<TokenStream> {
     let module_name = config
         .module_name
         .unwrap_or_else(|| "generated_api".to_string());
@@ -54,7 +54,7 @@ pub fn generate_mod<S: Spec>(config: ApiConfig) -> anyhow::Result<TokenStream> {
         .path
         .ok_or(anyhow!("no path to OpenAPI file specified"))?;
     let path = std::path::Path::new(&path);
-    let types = generate_from_path::<S>(path)?;
+    let types = generate_from_path(path)?;
 
     let ts = quote! {
         pub mod #module_ident {
@@ -70,21 +70,20 @@ pub fn generate_mod<S: Spec>(config: ApiConfig) -> anyhow::Result<TokenStream> {
     Ok(ts)
 }
 
-fn generate_from_path<S: Spec>(path: &Path) -> anyhow::Result<TokenStream> {
+fn generate_from_path(path: &Path) -> anyhow::Result<TokenStream> {
     let mut file = std::fs::File::open(path)?;
 
-    generate_from_reader::<S>(&mut file)
+    generate_from_reader(&mut file)
 }
 
 fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
-    let spec = S::from_str(s)?;
-    generate_code(&spec)
+    generate_from_reader(Cursor::new(s.as_bytes()))
 }
 
-fn generate_from_reader<S: Spec>(input: impl Read + Seek) -> anyhow::Result<TokenStream> {
+fn generate_from_reader(input: impl Read + Seek) -> anyhow::Result<TokenStream> {
     let mut input = BufReader::with_capacity(8192, input);
     let version = oasprobe::probe_yaml_oas_version(&mut input).map_err(|e| anyhow!(e))?;
-    input.rewind();
+    input.rewind()?;
     match version {
         #[cfg(feature = "oas30")]
         adapters::OASMajorVersion::OAS30 => read_and_gererate::<OAS30Spec>(input),
@@ -503,7 +502,7 @@ fn type_ref_of<S: Spec>(
     //   before, see above)
 
     match schema {
-        RefOr::Reference(r) => Err(anyhow!(
+        RefOr::Reference(_) => Err(anyhow!(
             "no mapping found for schema URI reference {schema:?}"
         )),
         RefOr::Object(schema) => match &schema.type_() {
@@ -573,8 +572,7 @@ mod tests {
     #[test]
     fn test_oas_petstore() {
         let reader = Cursor::new(PETSTORE_YAML);
-        super::generate_from_reader::<adapters::oas30::OAS30Spec>(reader)
-            .expect("reading petstore.yaml failed");
+        super::generate_from_reader(reader).expect("reading petstore.yaml failed");
     }
 
     #[test]
