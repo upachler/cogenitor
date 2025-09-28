@@ -1,19 +1,26 @@
 use anyhow::anyhow;
 use proc_macro2::TokenStream;
 use quote::quote;
-use std::{collections::HashMap, io::Read, path::Path};
+use std::{
+    collections::HashMap,
+    io::{BufReader, Read, Seek},
+    path::Path,
+    ptr::read,
+};
 use syn::Ident;
 
 use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
+    adapters::oas30::OAS30Spec,
     codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
     types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody},
 };
 
 pub mod codemodel;
 mod codewriter;
+mod oasprobe;
 mod translate;
 mod types;
 
@@ -74,7 +81,19 @@ fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
     generate_code(&spec)
 }
 
-fn generate_from_reader<S: Spec>(input: impl Read) -> anyhow::Result<TokenStream> {
+fn generate_from_reader<S: Spec>(input: impl Read + Seek) -> anyhow::Result<TokenStream> {
+    let mut input = BufReader::with_capacity(8192, input);
+    let version = oasprobe::probe_yaml_oas_version(&mut input).map_err(|e| anyhow!(e))?;
+    input.rewind();
+    match version {
+        #[cfg(feature = "oas30")]
+        adapters::OASMajorVersion::OAS30 => read_and_gererate::<OAS30Spec>(input),
+        #[cfg(feature = "oas31")]
+        adapters::OASMajorVersion::OAS31 => read_and_gererate::<OAS31Spec>(input),
+    }
+}
+
+fn read_and_gererate<S: Spec>(input: impl Read) -> anyhow::Result<TokenStream> {
     let spec = S::from_reader(input)?;
     generate_code(&spec)
 }

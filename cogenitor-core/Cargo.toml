@@ -3,6 +3,11 @@ name = "cogenitor-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["oas30"]
+oas30 = []
+oas31 = []
+
 [dependencies]
 anyhow.workspace = true
 http.workspace = true
