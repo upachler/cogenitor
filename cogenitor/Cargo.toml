@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cogenitor-macro = { version = "0.1.0", path = "../cogenitor-macro" }
+cogenitor-macro = { path = "../cogenitor-macro" }
+cogenitor-core = { path = "../cogenitor-core"}
