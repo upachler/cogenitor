@@ -12,7 +12,7 @@ use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr, Type};
 use crate::types::Format;
 use crate::types::{
     BooleanOrSchema, ByReference, Components, MediaType, Operation, Parameter, ParameterLocation,
-    PathItem, RefOr, Reference, RequestBody, Schema, Spec,
+    PathItem, RefOr, Reference, RequestBody, Response, Schema, Spec, StatusSpec,
 };
 
 pub struct OAS30Spec {
@@ -81,6 +81,17 @@ impl OAS3Resolver<openapiv3::RequestBody> for openapiv3::OpenAPI {
 
     fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::RequestBody> {
         let ro = self.components.as_ref()?.request_bodies.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
+impl OAS3Resolver<openapiv3::Response> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &str {
+        "#/components/responses/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Response> {
+        let ro = self.components.as_ref()?.responses.get(reference)?;
         self.resolve(ro)
     }
 }
@@ -604,6 +615,7 @@ impl crate::Spec for OAS30Spec {
     type MediaType = OAS30Pointer<MediaTypeSource>;
     type Operation = OAS30Pointer<OperationSource>;
     type RequestBody = OAS30Pointer<RequestBodySource>;
+    type Response = OAS30Pointer<ResponseSource>;
 
     fn from_reader(r: impl std::io::Read) -> anyhow::Result<impl crate::Spec> {
         let r = BufReader::new(r);
@@ -822,6 +834,30 @@ impl Operation<OAS30Spec> for OAS30Pointer<OperationSource> {
             })
         })
     }
+
+    fn responses(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::types::StatusSpec,
+            RefOr<<OAS30Spec as Spec>::Response>,
+        ),
+    > {
+        self.inner().responses.responses.iter().enumerate().map(
+            |(content_index, (status, ro_response))| {
+                let status = StatusSpec::try_from(status).unwrap();
+                (
+                    status.clone(),
+                    into_ref_or(ro_response, self, |p: &OperationSource| {
+                        ResponseSource::Operation {
+                            content_index,
+                            ref_source: p.clone(),
+                        }
+                    }),
+                )
+            },
+        )
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
@@ -990,6 +1026,71 @@ impl RequestBody<OAS30Spec> for OAS30Pointer<RequestBodySource> {
     }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub enum ResponseSource {
+    Uri {
+        uri: String,
+    },
+    Operation {
+        content_index: usize,
+        ref_source: OperationSource,
+    },
+}
+
+impl OAS30Source for ResponseSource {
+    type OAS30Type = openapiv3::Response;
+
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        match self {
+            ResponseSource::Uri { uri } => openapi.resolve_reference(uri).unwrap(),
+            ResponseSource::Operation {
+                content_index,
+                ref_source,
+            } => {
+                let ro = ref_source
+                    .inner(openapi)
+                    .responses
+                    .responses
+                    .get_index(*content_index)
+                    .unwrap()
+                    .1;
+                openapi.resolve(ro).unwrap()
+            }
+        }
+    }
+}
+
+impl Response<OAS30Spec> for OAS30Pointer<ResponseSource> {
+    fn content(&self) -> HashMap<String, <OAS30Spec as Spec>::MediaType> {
+        into_oas30_content(&self.inner().content, |content_index| OAS30Pointer {
+            openapi: self.openapi.clone(),
+            ref_source: MediaTypeSource::Response {
+                ref_source: self.ref_source.clone(),
+                content_index,
+            },
+        })
+    }
+}
+
+impl SourceFromUri for ResponseSource {
+    fn from_uri(uri: &str) -> Self {
+        ResponseSource::Uri {
+            uri: uri.to_string(),
+        }
+    }
+}
+
+impl TryFrom<&openapiv3::StatusCode> for StatusSpec {
+    type Error = <StatusSpec as FromStr>::Err;
+    fn try_from(s: &openapiv3::StatusCode) -> Result<Self, Self::Error> {
+        let s = s.to_string();
+        StatusSpec::from_str(&s)
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq)]
 pub enum MediaTypeSource {
     Parameter {
@@ -1000,8 +1101,10 @@ pub enum MediaTypeSource {
         ref_source: RequestBodySource,
         content_index: usize,
     },
-    // TODO:
-    //    Response{ref_source: ResponseSource, content: String},
+    Response {
+        ref_source: ResponseSource,
+        content_index: usize,
+    },
     //    Header{ref_source: HeaderSource, content: String}
 }
 impl OAS30Source for MediaTypeSource {
@@ -1022,6 +1125,10 @@ impl OAS30Source for MediaTypeSource {
                 ParameterSchemaOrContent::Content(index_map) => (index_map, content_index),
             },
             MediaTypeSource::RequestBody {
+                ref_source,
+                content_index,
+            } => (&ref_source.inner(openapi).content, content_index),
+            MediaTypeSource::Response {
                 ref_source,
                 content_index,
             } => (&ref_source.inner(openapi).content, content_index),

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, str::FromStr};
+use std::{collections::HashMap, io, num::ParseIntError, str::FromStr, string::ParseError};
 
 use json::JsonValue;
 
@@ -11,6 +11,7 @@ pub trait Spec: FromStr<Err = anyhow::Error> {
     type MediaType: MediaType<Self>;
     type Operation: Operation<Self>;
     type RequestBody: RequestBody<Self>;
+    type Response: Response<Self>;
 
     fn from_reader(r: impl io::Read) -> anyhow::Result<impl Spec>;
 
@@ -131,6 +132,23 @@ pub trait Operation<S: Spec> {
     fn parameters(&self) -> impl Iterator<Item = RefOr<S::Parameter>>;
     fn operation_id(&self) -> Option<&str>;
     fn request_body(&self) -> Option<RefOr<S::RequestBody>>;
+    fn responses(&self) -> impl Iterator<Item = (StatusSpec, RefOr<S::Response>)>;
+}
+
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub enum StatusSpec {
+    /// specifies all responses
+    Default,
+    Informational(u16),
+    Informational1XX,
+    Success(u16),
+    Success2XX,
+    Redirection(u16),
+    Redirection3XX,
+    ClientError(u16),
+    ClientError4XX,
+    ServerError(u16),
+    ServerError5XX,
 }
 
 /// https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-1-parameter-locations
@@ -159,6 +177,11 @@ pub trait Parameter<S: Spec>: ByReference + Clone {
 pub trait RequestBody<S: Spec>: ByReference + Clone {
     fn content(&self) -> HashMap<String, S::MediaType>;
     fn required(&self) -> bool;
+}
+
+// see https://spec.openapis.org/oas/v3.0.4.html#response-object
+pub trait Response<S: Spec>: ByReference + Clone {
+    fn content(&self) -> HashMap<String, S::MediaType>;
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#media-type-object

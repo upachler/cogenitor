@@ -70,7 +70,7 @@ pub fn generate_mod(config: ApiConfig) -> anyhow::Result<TokenStream> {
     Ok(ts)
 }
 
-fn generate_from_path(path: &Path) -> anyhow::Result<TokenStream> {
+pub fn generate_from_path(path: &Path) -> anyhow::Result<TokenStream> {
     let mut file = std::fs::File::open(path)?;
 
     generate_from_reader(&mut file)

@@ -114,22 +114,29 @@ The type of the parameter is determined using the rules in the section about [ma
 
 Broadly speaking, we distinguish between _known_ responses (that is, responses explicitely declared in the OpenAPI file) and _unknown_ responses (responses that the server yields, but are not defined in the API). Unknown responses are generally treated as an error, regardless of their response code (when an endpoint declared to respond with 200 returns 201, this is an error in terms of the spec).
 
-In terms of the responses declared in the OpenAPI file we devide those into two categories: Success responses (2xx) and Non-Success responses (1xx, 3xx-5xx, or any other non-2xx code).
+In terms of the responses declared in the OpenAPI file we devide those into two categories: Success responses (1xx, 2xx, 3xx) and Non-Success responses (4xx-5xx, or any other non-2xx code).
 
 The responses of an OpenAPI operation may link to a named response in the `#/components/responses` path. The names there may be used to name generated types.
 
-Each `Client` method returns a `Result<T,E>`, where `T` represents the success response category (2xx), and `E` non-success responses (non 2xx HTTP statuses as well as other errors alike).
+Each `Client` method returns a `Result<T,E>`, where `T` represents the success response category (1xx-3xx), and `E` non-success responses (4xx-5xx HTTP statuses as well as other errors alike).
 
 TODO: what to do with 'default' responses?
 
 
 #### TODO: Success Responses
 
-If there is no success response defined (no 2xx code present), `T` maps to the Rust unit type `()`.
+We treat all 1xx, 2xx and 3xx response codes as 'success' responses - because in `Result<T,E>`, `T` is the type used in `Result::Ok(T)`, which respresents success. In contrast to this, HTTP only calls the 2xx response code range 'success' - the 1xx and 3xx ranges are called 'informational' and 'redirection'. However, all three ranges are treated as 'success' when it comes to the generated result types.
 
-If there is exactly one success response defined, `T` maps to the type that is mapped for the media type(s) in `content` (see section below)
+If there is no informational, success or redirection response defined (no 1xx, 2xx or 3xx codes present), `T` maps to the Rust unit type `()`.
 
-If there are multiple success responses defined, `T` maps to an enum that is generated for this purpose. The enum carries the name  {operationFragment}`Success` (`GET /foo/bar` will become `FooBarSuccess`). For each success response, a variant for this response will be generated. The variants in the enum are called by the respective name of the HTTP code, so 200 becomes `Ok200`, 201 becomes `Created201`, etc.
+If there is exactly one such response defined, `T` maps to the type that is mapped for the media type(s) in `content` (see section below)
+
+If there are multiple success responses defined, `T` maps to an enum that is generated for this purpose. The enum carries the name  {operationFragment}`Success` (`GET /foo/bar` will become `FooBarSuccess`). For each defined response, a variant for this response will be generated.
+
+In OAS responses can bei either keyed to explicit status codes like 200 or 302, or be tied to entire ranges, like 2XX or 3XX, or the 'Default' range.
+* For explicit status codes, the variants in the enum are called by the respective name of the HTTP code. The variants are crated as tuple variants of `T`, so 200 becomes `Ok200(T)`, 201 becomes `Created201(T)`, etc. For non-standard codes in the OAS-supported 100..599 range, which don't have a name, the enum variant name is formed using the pattern `Status`{code} - so a code 288 is represented by the `Status288(T)` variant.
+* Status code ranges like '2XX' are created as `Status`{range}. The variant is generated as tuple `(u16,T)`, where the `u16` value stores the status code. So '2XX' becomes `Status2XX(u16,T)`.
+* Declared 'Default' responses are generated as the `Default(u16,T)` variant. Like ranges, `u16` contains the status code.
 
 
 #### TODO: Non-Success responses
@@ -146,7 +153,7 @@ For this reason, `E` will always be a generated Rust enum.
 The enum is generated as follows:
 * The name is composed of {operationFragment}`Error`. So for `PUT /pet`, the generated enum will be called `PutPetError`.
 * The variants are defined like this:
-  - Declared error codes, such as HTTP 400, are called after their {statusFragment}, so HTTP 400 becomes `NotFound400`. For each declared HTTP error (4xx or 5xx ranges), such a variant is generated. The variants are generated as tuple variants, whose single member type is the type yielded by mapping the media type of that response (see section below)
+  - Declared error codes, such as HTTP 400, are called after their {statusFragment}, so HTTP 400 becomes `NotFound400`. For each declared HTTP error (4xx or 5xx ranges), such a variant is generated. The variants are generated as tuple variants, whose single member type is the type yielded by mapping the media type of that response (see section below).
   - For undeclared HTTP responses, a variant called `UnknownResponse` is generated. The variant is generated as a tuple variant whoose type is `http::Response` from the `http` crate.
   - For all other errors, a tuple variant `OtherError` is generated. It's contained type is `Box<dyn Error>`.
 
