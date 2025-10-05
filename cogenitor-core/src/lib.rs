@@ -15,7 +15,7 @@ use types::{BooleanOrSchema, Schema, Spec};
 use crate::{
     adapters::oas30::OAS30Spec,
     codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
-    types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody},
+    types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
 };
 
 pub mod codemodel;
@@ -320,10 +320,15 @@ fn parse_path_into_impl_fn<S: Spec>(
 
     let fn_name = candidate_name; // FIXME: handle collisions
 
-    let return_type = TypeRef::GenericInstance {
-        generic_type: Box::new(cm.type_result()),
-        type_parameter: vec![cm.type_unit(), cm.type_unit()], // FIXME: need to assign proper result type params
-    };
+    let return_type = parse_into_fn_result(
+        cm,
+        m,
+        mapping,
+        path_name,
+        path_item,
+        method.clone(),
+        path_op,
+    )?;
     let mut function =
         FunctionBuilder::new(fn_name, return_type).param("self".to_string(), cm.type_ref_self());
 
@@ -378,6 +383,68 @@ fn parse_path_into_impl_fn<S: Spec>(
     }
 
     Ok(impl_builder.function(function.build()))
+}
+
+fn parse_into_fn_result<S: Spec>(
+    cm: &mut Codemodel,
+    m: &mut Module,
+    mapping: &mut TypeMapping<S>,
+    path_name: &str,
+    path_item: &S::PathItem,
+    method: http::Method,
+    path_op: &S::Operation,
+) -> anyhow::Result<TypeRef> {
+    let success_responses = path_op
+        .responses()
+        .filter(|(status_spec, _)| match status_spec {
+            types::StatusSpec::Default
+            | types::StatusSpec::Informational(_)
+            | types::StatusSpec::Informational1XX
+            | types::StatusSpec::Success(_)
+            | types::StatusSpec::Success2XX
+            | types::StatusSpec::Redirection(_)
+            | types::StatusSpec::Redirection3XX => true,
+            _ => false,
+        })
+        .collect::<Vec<_>>();
+
+    let success_type = match success_responses.len() {
+        0 => cm.type_unit(),
+        1 => {
+            let single_response = success_responses.get(0).unwrap();
+            let status_spec = single_response.0.clone();
+            let content = single_response.1.resolve().resolve_fully().content();
+            map_content(cm, m, mapping, &content, || {
+                content_enum_name(&method, path_name, &status_spec)
+            })?
+        }
+        _ => {
+            let enum_name =
+                translate::path_method_to_rust_type_name(method.clone(), path_name) + "Success";
+            let mut e = EnumBuilder::new(&enum_name);
+
+            for (status_spec, response) in success_responses {
+                let status_spec = &status_spec;
+                let content = response.resolve_fully().content();
+                let variant_name = translate::status_spec_to_rust_type_name(status_spec.clone());
+                let variant_type = map_content(cm, m, mapping, &content, || {
+                    content_enum_name(&method, path_name, &status_spec)
+                })?;
+                e = e.tuple_variant(&variant_name, vec![variant_type])?;
+            }
+
+            m.insert_enum(e.build()?).unwrap()
+        }
+    };
+    Ok(TypeRef::GenericInstance {
+        generic_type: Box::new(cm.type_result()),
+        type_parameter: vec![success_type, cm.type_unit()], // FIXME: need to assign proper result type params
+    })
+}
+
+fn content_enum_name(method: &http::Method, path_name: &str, status_spec: &StatusSpec) -> String {
+    let prefix = translate::path_method_to_rust_type_name(method.clone(), path_name);
+    prefix + translate::status_spec_to_rust_type_name(status_spec.clone()).as_str()
 }
 
 fn map_content<S: Spec>(

@@ -135,7 +135,7 @@ pub trait Operation<S: Spec> {
     fn responses(&self) -> impl Iterator<Item = (StatusSpec, RefOr<S::Response>)>;
 }
 
-#[derive(Clone, Debug, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub enum StatusSpec {
     /// specifies all responses
     Default,

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::types::StatusSpec;
+
 // Array of strict keywords (currently in use)
 const STRICT_KEYWORDS: &[&str] = &[
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
@@ -132,6 +134,102 @@ pub(crate) fn path_method_to_rust_type_name(method: http::Method, path: &str) ->
     path_rump + &method_str
 }
 
+pub(crate) fn status_spec_to_rust_type_name(status_spec: StatusSpec) -> String {
+    match status_spec {
+        StatusSpec::Default => "Default".to_string(),
+        StatusSpec::Informational1XX => "Status1XX".to_string(),
+        StatusSpec::Success2XX => "Status2XX".to_string(),
+        StatusSpec::Redirection3XX => "Status3XX".to_string(),
+        StatusSpec::ClientError4XX => "Status4XX".to_string(),
+        StatusSpec::ServerError5XX => "Status5XX".to_string(),
+        StatusSpec::Informational(code) => status_code_to_name(code),
+        StatusSpec::Success(code) => status_code_to_name(code),
+        StatusSpec::Redirection(code) => status_code_to_name(code),
+        StatusSpec::ClientError(code) => status_code_to_name(code),
+        StatusSpec::ServerError(code) => status_code_to_name(code),
+    }
+}
+
+/// Maps HTTP status codes to their standard names, or returns Status{code} for non-standard codes
+fn status_code_to_name(code: u16) -> String {
+    match code {
+        // 1xx Informational
+        100 => "Continue100".to_string(),
+        101 => "SwitchingProtocols101".to_string(),
+        102 => "Processing102".to_string(),
+        103 => "EarlyHints103".to_string(),
+
+        // 2xx Success
+        200 => "Ok200".to_string(),
+        201 => "Created201".to_string(),
+        202 => "Accepted202".to_string(),
+        203 => "NonAuthoritativeInformation203".to_string(),
+        204 => "NoContent204".to_string(),
+        205 => "ResetContent205".to_string(),
+        206 => "PartialContent206".to_string(),
+        207 => "MultiStatus207".to_string(),
+        208 => "AlreadyReported208".to_string(),
+        226 => "ImUsed226".to_string(),
+
+        // 3xx Redirection
+        300 => "MultipleChoices300".to_string(),
+        301 => "MovedPermanently301".to_string(),
+        302 => "Found302".to_string(),
+        303 => "SeeOther303".to_string(),
+        304 => "NotModified304".to_string(),
+        305 => "UseProxy305".to_string(),
+        307 => "TemporaryRedirect307".to_string(),
+        308 => "PermanentRedirect308".to_string(),
+
+        // 4xx Client Error
+        400 => "BadRequest400".to_string(),
+        401 => "Unauthorized401".to_string(),
+        402 => "PaymentRequired402".to_string(),
+        403 => "Forbidden403".to_string(),
+        404 => "NotFound404".to_string(),
+        405 => "MethodNotAllowed405".to_string(),
+        406 => "NotAcceptable406".to_string(),
+        407 => "ProxyAuthenticationRequired407".to_string(),
+        408 => "RequestTimeout408".to_string(),
+        409 => "Conflict409".to_string(),
+        410 => "Gone410".to_string(),
+        411 => "LengthRequired411".to_string(),
+        412 => "PreconditionFailed412".to_string(),
+        413 => "PayloadTooLarge413".to_string(),
+        414 => "UriTooLong414".to_string(),
+        415 => "UnsupportedMediaType415".to_string(),
+        416 => "RangeNotSatisfiable416".to_string(),
+        417 => "ExpectationFailed417".to_string(),
+        418 => "ImATeapot418".to_string(),
+        421 => "MisdirectedRequest421".to_string(),
+        422 => "UnprocessableEntity422".to_string(),
+        423 => "Locked423".to_string(),
+        424 => "FailedDependency424".to_string(),
+        425 => "TooEarly425".to_string(),
+        426 => "UpgradeRequired426".to_string(),
+        428 => "PreconditionRequired428".to_string(),
+        429 => "TooManyRequests429".to_string(),
+        431 => "RequestHeaderFieldsTooLarge431".to_string(),
+        451 => "UnavailableForLegalReasons451".to_string(),
+
+        // 5xx Server Error
+        500 => "InternalServerError500".to_string(),
+        501 => "NotImplemented501".to_string(),
+        502 => "BadGateway502".to_string(),
+        503 => "ServiceUnavailable503".to_string(),
+        504 => "GatewayTimeout504".to_string(),
+        505 => "HttpVersionNotSupported505".to_string(),
+        506 => "VariantAlsoNegotiates506".to_string(),
+        507 => "InsufficientStorage507".to_string(),
+        508 => "LoopDetected508".to_string(),
+        510 => "NotExtended510".to_string(),
+        511 => "NetworkAuthenticationRequired511".to_string(),
+
+        // Non-standard codes use the pattern Status{code}
+        _ => format!("Status{}", code),
+    }
+}
+
 pub(crate) fn media_type_range_to_rust_type_name(media_type_key: &str) -> String {
     media_type_key
         .replace("*", "Any")
@@ -229,5 +327,82 @@ mod tests {
     fn test_empty_path() {
         let result = path_method_to_rust_fn_name(&Method::GET, "").unwrap();
         assert_eq!(result, "get");
+    }
+
+    #[test]
+    fn test_status_spec_default() {
+        let result = status_spec_to_rust_type_name(StatusSpec::Default);
+        assert_eq!(result, "Default");
+    }
+
+    #[test]
+    fn test_status_spec_ranges() {
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Informational1XX),
+            "Status1XX"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Success2XX),
+            "Status2XX"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Redirection3XX),
+            "Status3XX"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ClientError4XX),
+            "Status4XX"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ServerError5XX),
+            "Status5XX"
+        );
+    }
+
+    #[test]
+    fn test_status_spec_standard_codes() {
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Success(200)),
+            "Ok200"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Success(201)),
+            "Created201"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ClientError(404)),
+            "NotFound404"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ClientError(400)),
+            "BadRequest400"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ServerError(500)),
+            "InternalServerError500"
+        );
+    }
+
+    #[test]
+    fn test_status_spec_non_standard_codes() {
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Success(288)),
+            "Status288"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::ClientError(499)),
+            "Status499"
+        );
+        assert_eq!(
+            status_spec_to_rust_type_name(StatusSpec::Informational(199)),
+            "Status199"
+        );
+    }
+
+    #[test]
+    fn test_status_code_to_name_edge_cases() {
+        assert_eq!(status_code_to_name(418), "ImATeapot418");
+        assert_eq!(status_code_to_name(999), "Status999");
+        assert_eq!(status_code_to_name(123), "Status123");
     }
 }

@@ -112,7 +112,7 @@ The type of the parameter is determined using the rules in the section about [ma
 
 ### Responses
 
-Broadly speaking, we distinguish between _known_ responses (that is, responses explicitely declared in the OpenAPI file) and _unknown_ responses (responses that the server yields, but are not defined in the API). Unknown responses are generally treated as an error, regardless of their response code (when an endpoint declared to respond with 200 returns 201, this is an error in terms of the spec).
+Broadly speaking, we distinguish between _known_ responses (that is, responses explicitely declared in the OpenAPI file) and _unknown_ responses (responses that the server yields, but are not defined in the API). Unknown responses are generally treated as an error, regardless of their response code (when an endpoint declared to respond with 200 actuall returns 201 instead, this is an error in terms of the spec).
 
 In terms of the responses declared in the OpenAPI file we devide those into two categories: Success responses (1xx, 2xx, 3xx) and Non-Success responses (4xx-5xx, or any other non-2xx code).
 
@@ -125,7 +125,7 @@ TODO: what to do with 'default' responses?
 
 #### TODO: Success Responses
 
-We treat all 1xx, 2xx and 3xx response codes as 'success' responses - because in `Result<T,E>`, `T` is the type used in `Result::Ok(T)`, which respresents success. In contrast to this, HTTP only calls the 2xx response code range 'success' - the 1xx and 3xx ranges are called 'informational' and 'redirection'. However, all three ranges are treated as 'success' when it comes to the generated result types.
+We treat all 1xx, 2xx and 3xx response codes as 'success' responses - because in `Result<T,E>`, `T` is the type used in `Result::Ok(T)`, which respresents success. In contrast to this, HTTP only calls the 2xx response code range 'success' - the 1xx and 3xx ranges are called 'informational' and 'redirection'. However, all three ranges are treated as 'success' when it comes to the generated result types. The 'Default' range is both 'success' and non-successful (it may be returned in either case).
 
 If there is no informational, success or redirection response defined (no 1xx, 2xx or 3xx codes present), `T` maps to the Rust unit type `()`.
 
