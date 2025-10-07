@@ -171,7 +171,7 @@ fn populate_types<S: Spec>(
                 m.insert_type_alias(&alias_name, target.clone())?;
             }
             RefOr::Object(schema) => {
-                let type_ref = parse_schema(schema, Some(name.clone()), cm, m, &mapping)?;
+                let type_ref = parse_schema(schema, Some(name.clone()), cm, m, &mut mapping)?;
                 mapping.schema_mapping.insert(ro_schema, type_ref);
             }
         }
@@ -265,13 +265,14 @@ fn parse_schema<S: Spec>(
     name: Option<String>,
     cm: &mut Codemodel,
     m: &mut Module,
-    mapping: &TypeMapping<S>,
+    mapping: &mut TypeMapping<S>,
 ) -> anyhow::Result<TypeRef> {
     let kind = type_kind_of(schema)?;
 
     match &kind {
         TypeKind::Struct => {
-            let mut b = StructBuilder::new(name.as_ref().unwrap());
+            let struct_name = name.as_ref().unwrap();
+            let mut b = StructBuilder::new(struct_name);
             b = b
                 .attr_with_input(
                     "derive",
@@ -286,7 +287,9 @@ fn parse_schema<S: Spec>(
             for (name, schema) in schema.properties() {
                 let rust_name = translate::property_to_rust_fieldname(&name);
                 let schema = schema.resolve();
-                let type_ref = type_ref_of(cm, mapping, &schema)?;
+                let candidate_name =
+                    translate::schema_to_rust_typename((struct_name.to_string() + &name).as_str());
+                let type_ref = type_ref_of(cm, m, mapping, &schema, &candidate_name)?;
                 b = b.field(&rust_name, type_ref)?;
             }
             let s = b.build()?;
@@ -433,7 +436,7 @@ fn parse_into_fn_result<S: Spec>(
                 e = e.tuple_variant(&variant_name, vec![variant_type])?;
             }
 
-            m.insert_enum(e.build()?).unwrap()
+            m.insert_enum(e.build()?)?
         }
     };
     Ok(TypeRef::GenericInstance {
@@ -452,17 +455,18 @@ fn map_content<S: Spec>(
     m: &mut Module,
     mapping: &mut TypeMapping<S>,
     content: &HashMap<String, S::MediaType>,
-    enum_name_fn: impl Fn() -> String,
+    content_name_fn: impl Fn() -> String,
 ) -> anyhow::Result<TypeRef> {
     let mapped_type;
     match content.len() {
         0 => mapped_type = cm.type_unit(),
         1 => {
             let (media_type_key, media_type) = content.iter().next().unwrap();
-            mapped_type = map_media_type::<S>(cm, mapping, media_type_key, media_type);
+            mapped_type =
+                map_media_type::<S>(cm, m, mapping, media_type_key, media_type, content_name_fn);
         }
         _ => {
-            mapped_type = map_enum_from_content::<S>(cm, m, mapping, content, enum_name_fn)?;
+            mapped_type = map_enum_from_content::<S>(cm, m, mapping, content, content_name_fn)?;
         }
     };
     Ok(mapped_type)
@@ -473,15 +477,23 @@ fn map_enum_from_content<S: Spec>(
     m: &mut Module,
     mapping: &mut TypeMapping<S>,
     content: &HashMap<String, S::MediaType>,
-    enum_name_fn: impl Fn() -> String,
+    content_name_fn: impl Fn() -> String,
 ) -> anyhow::Result<TypeRef> {
     // TODO: disambiguate!
-    let enum_name = enum_name_fn();
+    let enum_name = content_name_fn();
     let mut e = EnumBuilder::new(&enum_name);
 
     for (media_type_key, media_type) in content.iter() {
         let variant_name = translate::media_type_range_to_rust_type_name(media_type_key);
-        let variant_type = map_media_type::<S>(cm, mapping, media_type_key, media_type);
+        let content_variant_name_fn = || enum_name.clone() + variant_name.as_str();
+        let variant_type = map_media_type::<S>(
+            cm,
+            m,
+            mapping,
+            media_type_key,
+            media_type,
+            content_variant_name_fn,
+        );
         e = e.tuple_variant(&variant_name, vec![variant_type])?;
     }
 
@@ -491,14 +503,17 @@ fn map_enum_from_content<S: Spec>(
 
 fn map_media_type<S: Spec>(
     cm: &mut Codemodel,
-    mapping: &TypeMapping<S>,
+    m: &mut Module,
+    mapping: &mut TypeMapping<S>,
     media_type_key: &str,
     media_type: &S::MediaType,
+    schema_name_fn: impl Fn() -> String,
 ) -> TypeRef {
     match media_type.schema() {
         Some(schema) => {
             let schema = schema.resolve();
-            match type_ref_of(cm, mapping, &schema).ok() {
+
+            match type_ref_of(cm, m, mapping, &schema, &schema_name_fn()).ok() {
                 Some(type_ref) => type_ref,
                 None => todo!(),
             }
@@ -524,7 +539,7 @@ fn append_param<S: Spec>(
     m: &mut Module,
     mapping: &mut TypeMapping<S>,
     param: &S::Parameter,
-    param_content_type_name_fn: impl Fn(&S::Parameter) -> String,
+    param_type_name_fn: impl Fn(&S::Parameter) -> String,
 ) -> anyhow::Result<FunctionBuilder> {
     let mapped_name = derive_function_param_name(param.name(), &function);
 
@@ -532,12 +547,14 @@ fn append_param<S: Spec>(
     // of this complexity, however, it may severely impact the way parameters
     // are serialized. See the sections in the spec, starting from here:
     // https://spec.openapis.org/oas/v3.0.4.html#x4-7-12-2-2-fixed-fields-for-use-with-schema
+    let candidate_param_type_name = param_type_name_fn(param);
     let mapped_type;
     if let Some(schema) = param.schema() {
-        mapped_type = type_ref_of(cm, mapping, &schema)?;
+        mapped_type = type_ref_of(cm, m, mapping, &schema, &candidate_param_type_name)?;
     } else if let Some(content) = param.content() {
-        let enum_content_type_name = || param_content_type_name_fn(param);
-        mapped_type = map_content(cm, m, mapping, &content, enum_content_type_name)?;
+        mapped_type = map_content(cm, m, mapping, &content, || {
+            candidate_param_type_name.clone()
+        })?;
     } else {
         return Err(anyhow!(
             "invariant violated in OAS spec: parameter {} has neither 'schema' nor 'content' defined!",
@@ -551,8 +568,10 @@ fn append_param<S: Spec>(
 
 fn type_ref_of<S: Spec>(
     cm: &mut Codemodel,
-    mapping: &TypeMapping<S>,
+    m: &mut Module,
+    mapping: &mut TypeMapping<S>,
     schema: &RefOr<S::Schema>,
+    candidate_name: &str,
 ) -> anyhow::Result<TypeRef> {
     if let Some(type_ref) = mapping.schema_mapping.get(schema) {
         // mapped type found for RefOr
@@ -585,9 +604,7 @@ fn type_ref_of<S: Spec>(
                         types::Type::Null => Ok(cm.type_unit()),
                         types::Type::Boolean => Ok(cm.type_bool()),
                         types::Type::Object => {
-                            todo!(
-                                "inlined schemata are currently unsupported, trying schema {schema:?}"
-                            )
+                            parse_schema(schema, Some(candidate_name.to_string()), cm, m, mapping)
                         }
                         types::Type::Array => {
                             // check for violations against rules for 'items' in
@@ -599,7 +616,10 @@ fn type_ref_of<S: Spec>(
                                 return Err(anyhow!("'items' must contain exactly one schema"));
                             }
                             let item_schema = items.get(0).unwrap().resolve();
-                            let item_type = type_ref_of(cm, mapping, &item_schema).unwrap();
+                            let candidate_item_name = candidate_name.to_string() + "Item";
+                            let item_type =
+                                type_ref_of(cm, m, mapping, &item_schema, &candidate_item_name)
+                                    .unwrap();
                             Ok(cm.type_instance(&cm.type_vec(), &vec![item_type]))
                         }
                         types::Type::Number => match schema.format() {
