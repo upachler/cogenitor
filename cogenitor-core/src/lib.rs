@@ -4,7 +4,7 @@ use quote::quote;
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek},
-    path::Path,
+    path::{Path, is_separator},
     ptr::read,
 };
 use syn::Ident;
@@ -397,24 +397,64 @@ fn parse_into_fn_result<S: Spec>(
     method: http::Method,
     path_op: &S::Operation,
 ) -> anyhow::Result<TypeRef> {
-    let success_responses = path_op
-        .responses()
-        .filter(|(status_spec, _)| match status_spec {
-            types::StatusSpec::Default
-            | types::StatusSpec::Informational(_)
+    fn is_success(status_spec: StatusSpec) -> bool {
+        match status_spec {
+            types::StatusSpec::Informational(_)
             | types::StatusSpec::Informational1XX
             | types::StatusSpec::Success(_)
             | types::StatusSpec::Success2XX
             | types::StatusSpec::Redirection(_)
             | types::StatusSpec::Redirection3XX => true,
             _ => false,
+        }
+    }
+
+    let success_responses = path_op
+        .responses()
+        .filter(|(status_spec, _)| match status_spec {
+            types::StatusSpec::Default => true,
+            s => is_success(s.clone()),
+        })
+        .collect::<Vec<_>>();
+    let error_responses = path_op
+        .responses()
+        .filter(|(status_spec, _)| match status_spec {
+            types::StatusSpec::Default => true,
+            s => !is_success(s.clone()),
         })
         .collect::<Vec<_>>();
 
-    let success_type = match success_responses.len() {
+    let success_type = build_response_type(
+        cm,
+        m,
+        mapping,
+        path_name,
+        method.clone(),
+        success_responses,
+        "Success",
+    )?;
+    let error_type =
+        build_response_type(cm, m, mapping, path_name, method, error_responses, "Error")?;
+
+    Ok(TypeRef::GenericInstance {
+        generic_type: Box::new(cm.type_result()),
+        type_parameter: vec![success_type, error_type], // FIXME: need to assign proper result type params
+    })
+}
+
+fn build_response_type<S: Spec>(
+    cm: &mut Codemodel,
+    m: &mut Module,
+    mapping: &mut TypeMapping<S>,
+    path_name: &str,
+    method: http::Method,
+    responses: Vec<(StatusSpec, RefOr<<S as Spec>::Response>)>,
+    resonses_name_suffix: &str,
+) -> anyhow::Result<TypeRef> {
+    let type_ref = match responses.len() {
         0 => cm.type_unit(),
         1 => {
-            let single_response = success_responses.get(0).unwrap();
+            let single_response = responses.get(0).unwrap();
             let status_spec = single_response.0.clone();
             let content = single_response.1.resolve().resolve_fully().content();
             map_content(cm, m, mapping, &content, || {
@@ -422,11 +462,11 @@ fn parse_into_fn_result<S: Spec>(
             })?
         }
         _ => {
-            let enum_name =
-                translate::path_method_to_rust_type_name(method.clone(), path_name) + "Success";
+            let enum_name = translate::path_method_to_rust_type_name(method.clone(), path_name)
+                + resonses_name_suffix;
             let mut e = EnumBuilder::new(&enum_name);
 
-            for (status_spec, response) in success_responses {
+            for (status_spec, response) in responses {
                 let status_spec = &status_spec;
                 let content = response.resolve_fully().content();
                 let variant_name = translate::status_spec_to_rust_type_name(status_spec.clone());
@@ -439,10 +479,7 @@ fn parse_into_fn_result<S: Spec>(
             m.insert_enum(e.build()?)?
         }
     };
-    Ok(TypeRef::GenericInstance {
-        generic_type: Box::new(cm.type_result()),
-        type_parameter: vec![success_type, cm.type_unit()], // FIXME: need to assign proper result type params
-    })
+    Ok(type_ref)
 }
 
 fn content_enum_name(method: &http::Method, path_name: &str, status_spec: &StatusSpec) -> String {
