@@ -398,44 +398,9 @@ fn parse_into_fn_result<S: Spec>(
     method: http::Method,
     path_op: &S::Operation,
 ) -> anyhow::Result<TypeRef> {
-    fn is_success(status_spec: StatusSpec) -> bool {
-        match status_spec {
-            types::StatusSpec::Informational(_)
-            | types::StatusSpec::Informational1XX
-            | types::StatusSpec::Success(_)
-            | types::StatusSpec::Success2XX
-            | types::StatusSpec::Redirection(_)
-            | types::StatusSpec::Redirection3XX => true,
-            _ => false,
-        }
-    }
-
-    let success_responses = path_op
-        .responses()
-        .filter(|(status_spec, _)| match status_spec {
-            types::StatusSpec::Default => true,
-            s => is_success(s.clone()),
-        })
-        .collect::<Vec<_>>();
-    let error_responses = path_op
-        .responses()
-        .filter(|(status_spec, _)| match status_spec {
-            types::StatusSpec::Default => true,
-            s => !is_success(s.clone()),
-        })
-        .collect::<Vec<_>>();
-
-    let success_type = build_response_type(
-        cm,
-        m,
-        mapping,
-        path_name,
-        method.clone(),
-        success_responses,
-        "Success",
-    )?;
-    let error_type =
-        build_response_type(cm, m, mapping, path_name, method, error_responses, "Error")?;
+    let success_type =
+        build_response_type(cm, m, mapping, path_name, method.clone(), path_op, true)?;
+    let error_type = build_response_type(cm, m, mapping, path_name, method, path_op, false)?;
 
     Ok(TypeRef::GenericInstance {
         generic_type: Box::new(cm.type_result()),
@@ -449,9 +414,35 @@ fn build_response_type<S: Spec>(
     mapping: &mut TypeMapping<S>,
     path_name: &str,
     method: http::Method,
-    responses: Vec<(StatusSpec, RefOr<<S as Spec>::Response>)>,
-    resonses_name_suffix: &str,
+    path_op: &S::Operation,
+    build_for_success: bool,
 ) -> anyhow::Result<TypeRef> {
+    fn is_success(status_spec: StatusSpec) -> bool {
+        match status_spec {
+            types::StatusSpec::Informational(_)
+            | types::StatusSpec::Informational1XX
+            | types::StatusSpec::Success(_)
+            | types::StatusSpec::Success2XX
+            | types::StatusSpec::Redirection(_)
+            | types::StatusSpec::Redirection3XX => true,
+            _ => false,
+        }
+    }
+
+    let responses = path_op
+        .responses()
+        .filter(|(status_spec, _)| match status_spec {
+            types::StatusSpec::Default => true,
+            s => !build_for_success ^ is_success(s.clone()),
+        })
+        .collect::<Vec<_>>();
+
+    let resonses_name_suffix: &str = if build_for_success {
+        "Success"
+    } else {
+        "Error"
+    };
+
     let type_ref = match responses.len() {
         0 => cm.type_unit(),
         1 => {
