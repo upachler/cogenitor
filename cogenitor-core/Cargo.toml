@@ -25,6 +25,7 @@ serde_yaml = "0.9.34"
 syn = "2.0.101"
 thiserror = "2.0.12"
 yaml-rust2 = "0.10.1"
+rust-format = { version = "0.3.4", features = ["token_stream"] }
 
 [dev-dependencies]
 assert-tokenstreams-eq = "0.1.0"

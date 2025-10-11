@@ -1,6 +1,8 @@
 use std::ops::Deref;
 
 use anyhow::anyhow;
+use thiserror::Error;
+use rust_format::Formatter;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 
@@ -114,6 +116,15 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
         _ => return Err(anyhow!("unsupported type declaration {type_ref:?}")),
     };
     Ok(ts)
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct FormattingError(#[from] rust_format::Error);
+
+pub fn fmt_code(ts: proc_macro2::TokenStream) -> Result<String, FormattingError> {
+    let formatter = rust_format::RustFmt::default();
+    Ok(formatter.format_tokens(ts)?)
 }
 
 fn syn_type_name_of(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {

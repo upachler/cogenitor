@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use codewriter::fmt_code;
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::{
@@ -113,7 +114,7 @@ fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<TokenStream> {
 
     let ts = codewriter::write_to_token_stream(&codemodel, "crate")?;
 
-    println!("token stream: {ts}");
+    println!("token stream: \n{}", fmt_code(ts.clone()).unwrap());
     Ok(ts)
 }
 
