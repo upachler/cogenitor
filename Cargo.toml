@@ -6,6 +6,7 @@ members = [
     "cogenitor-macro",
     "cogenitor-model",
     "cogenitor-test",
+    "mirror-api-guru",
 ]
 
 [workspace.dependencies]
