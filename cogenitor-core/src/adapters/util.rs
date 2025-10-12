@@ -30,11 +30,11 @@ impl FromStr for StatusSpec {
             s => {
                 let code = str::parse::<u16>(s)?;
                 match code {
-                    100..199 => Self::Informational(code),
-                    200..299 => Self::Success(code),
-                    300..399 => Self::Redirection(code),
-                    400..499 => Self::ClientError(code),
-                    500..599 => Self::ServerError(code),
+                    100..=199 => Self::Informational(code),
+                    200..=299 => Self::Success(code),
+                    300..=399 => Self::Redirection(code),
+                    400..=499 => Self::ClientError(code),
+                    500..=599 => Self::ServerError(code),
                     _ => return Err(ParseStatusSpecError::OutOfRange),
                 }
             }
