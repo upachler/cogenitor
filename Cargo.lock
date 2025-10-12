@@ -186,6 +186,7 @@ version = "0.1.0"
 dependencies = [
  "cogenitor",
  "cogenitor-core",
+ "http",
  "serde",
  "serde_json",
 ]

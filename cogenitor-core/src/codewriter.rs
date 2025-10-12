@@ -1,14 +1,14 @@
 use std::ops::Deref;
 
 use anyhow::anyhow;
-use thiserror::Error;
-use rust_format::Formatter;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
+use rust_format::Formatter;
+use thiserror::Error;
 
 use crate::codemodel::{
-    Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef, function::Function,
-    implementation::Implementation,
+    Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef, TypeRefOrTokenStream,
+    function::Function, implementation::Implementation,
 };
 
 // useful read on working with proc_macro2, quote and syn:
@@ -57,7 +57,10 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
             let attrs = tokenize_attrs(s.attr_iter());
             for f in s.field_iter() {
                 let field_name = Ident::new(&f.name(), Span::call_site());
-                let syn_type_ref = syn_type_name_of(f.type_())?;
+                let syn_type_ref = match f.type_() {
+                    TypeRefOrTokenStream::TypeRef(type_ref) => syn_type_name_of(type_ref)?,
+                    TypeRefOrTokenStream::TokenStream(token_stream) => token_stream.clone(),
+                };
                 let field_type: TokenStream = syn_type_ref.to_token_stream();
                 struct_fields.push(quote!(pub #field_name: #field_type));
             }
@@ -79,8 +82,15 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                     }
                     EnumVariantData::Tuple(types) => {
                         let mut variant_types = Vec::new();
-                        for t in types {
-                            let syn_type_ref = syn_type_name_of(t)?;
+                        for t_or_ts in types {
+                            let syn_type_ref = match t_or_ts {
+                                TypeRefOrTokenStream::TokenStream(token_stream) => {
+                                    token_stream.clone()
+                                }
+                                TypeRefOrTokenStream::TypeRef(type_ref) => {
+                                    syn_type_name_of(type_ref)?
+                                }
+                            };
                             variant_types.push(syn_type_ref);
                         }
                         enum_variants.push(quote!(#variant_name(#(#variant_types),*)));
@@ -89,7 +99,14 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                         let mut variant_fields = Vec::new();
                         for f in fields {
                             let field_name = Ident::new(&f.name(), Span::call_site());
-                            let syn_type_ref = syn_type_name_of(f.type_())?;
+                            let syn_type_ref = match f.type_() {
+                                TypeRefOrTokenStream::TypeRef(type_ref) => {
+                                    syn_type_name_of(type_ref)?
+                                }
+                                TypeRefOrTokenStream::TokenStream(token_stream) => {
+                                    token_stream.clone()
+                                }
+                            };
                             variant_fields.push(quote!(#field_name: #syn_type_ref));
                         }
                         enum_variants.push(quote!(#variant_name { #(#variant_fields),* }));

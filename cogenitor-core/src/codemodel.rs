@@ -204,13 +204,29 @@ impl FieldListBuilder {
         FieldListBuilder { fields: Vec::new() }
     }
 
-    pub fn field(mut self, name: &str, type_ref: TypeRef) -> Result<Self, FieldListBuilderError> {
+    pub fn field(self, name: &str, type_ref: TypeRef) -> Result<Self, FieldListBuilderError> {
+        self.field_impl(name, TypeRefOrTokenStream::TypeRef(type_ref))
+    }
+
+    pub fn field_with_input(
+        self,
+        name: &str,
+        input: TokenStream,
+    ) -> Result<Self, FieldListBuilderError> {
+        self.field_impl(name, TypeRefOrTokenStream::TokenStream(input))
+    }
+
+    fn field_impl(
+        mut self,
+        name: &str,
+        t_or_ts: TypeRefOrTokenStream,
+    ) -> Result<Self, FieldListBuilderError> {
         if self.fields.iter().any(|f| f.name.eq(name)) {
             return Err(FieldListBuilderError::DuplicateFieldName);
         }
         let field = Field {
             name: name.to_string(),
-            type_ref,
+            type_ref_or_ts: t_or_ts,
         };
         self.fields.push(field);
         Ok(self)
@@ -282,13 +298,35 @@ pub enum StructBuilderError {
     AttrPathInvalid,
 }
 
+#[derive(Debug)]
+pub(crate) enum TypeRefOrTokenStream {
+    TypeRef(TypeRef),
+    TokenStream(TokenStream),
+}
+impl TypeRefOrTokenStream {
+    pub(crate) fn unwrap_type_ref(&self) -> &TypeRef {
+        if let TypeRefOrTokenStream::TypeRef(type_ref) = self {
+            type_ref
+        } else {
+            panic!("expected TypeRef variant, encountered {self:?}")
+        }
+    }
+    pub(crate) fn unwrap_token_stream(&self) -> &TokenStream {
+        if let TypeRefOrTokenStream::TokenStream(token_stream) = self {
+            token_stream
+        } else {
+            panic!("expected TokenStream variant, encountered {self:?}")
+        }
+    }
+}
+
 /// Represents the data associated with an enum variant
 #[derive(Debug)]
 pub enum EnumVariantData {
     /// Unit variant (e.g., `Red`)
     Unit,
     /// Tuple variant (e.g., `Color(u8, u8, u8)`)
-    Tuple(Vec<TypeRef>),
+    Tuple(Vec<TypeRefOrTokenStream>),
     /// Struct variant (e.g., `Point { x: i32, y: i32 }`)
     Struct(Vec<Field>),
 }
@@ -369,6 +407,14 @@ impl StructBuilder {
         Ok(self)
     }
 
+    pub fn field_with_input(
+        mut self,
+        name: &str,
+        input: TokenStream,
+    ) -> Result<Self, StructBuilderError> {
+        self.field_builder = self.field_builder.field_with_input(name, input)?;
+        Ok(self)
+    }
     pub fn attr(mut self, name: &str) -> Result<Self, StructBuilderError> {
         self.attr_builder = self.attr_builder.attr(name)?;
         Ok(self)
@@ -413,10 +459,34 @@ impl EnumBuilder {
         Ok(self)
     }
 
-    pub fn tuple_variant(
+    pub fn tuple_variant(self, name: &str, types: Vec<TypeRef>) -> Result<Self, EnumBuilderError> {
+        self.tuple_variant_impl(
+            name,
+            types
+                .iter()
+                .map(|t| TypeRefOrTokenStream::TypeRef(t.clone()))
+                .collect(),
+        )
+    }
+
+    pub fn tuple_variant_with_input(
+        self,
+        name: &str,
+        types: Vec<TokenStream>,
+    ) -> Result<Self, EnumBuilderError> {
+        self.tuple_variant_impl(
+            name,
+            types
+                .iter()
+                .map(|t| TypeRefOrTokenStream::TokenStream(t.clone()))
+                .collect(),
+        )
+    }
+
+    fn tuple_variant_impl(
         mut self,
         name: &str,
-        types: Vec<TypeRef>,
+        types: Vec<TypeRefOrTokenStream>,
     ) -> Result<Self, EnumBuilderError> {
         if self.variants.iter().any(|v| v.name.eq(name)) {
             return Err(EnumBuilderError::DuplicateVariantName);
@@ -667,12 +737,12 @@ pub trait NamedItem {
 #[derive(Debug)]
 pub struct Field {
     pub name: String,
-    pub type_ref: TypeRef,
+    pub type_ref_or_ts: TypeRefOrTokenStream,
 }
 
 impl Field {
-    pub fn type_(&self) -> &TypeRef {
-        &self.type_ref
+    pub fn type_(&self) -> &TypeRefOrTokenStream {
+        &self.type_ref_or_ts
     }
 }
 impl NamedItem for Field {
@@ -1205,12 +1275,14 @@ mod tests {
                 match rectangle.data() {
                     EnumVariantData::Tuple(types) => {
                         assert_eq!(types.len(), 2);
-                        for type_ref in types {
-                            match type_ref {
-                                TypeRef::Builtin(builtin) => {
-                                    assert_eq!(builtin.name(), "f64");
+                        for type_ref_or_ts in types {
+                            {
+                                match type_ref_or_ts.unwrap_type_ref() {
+                                    TypeRef::Builtin(builtin) => {
+                                        assert_eq!(builtin.name(), "f64");
+                                    }
+                                    _ => panic!("Rectangle variant should contain f64 types"),
                                 }
-                                _ => panic!("Rectangle variant should contain f64 types"),
                             }
                         }
                     }
@@ -1226,10 +1298,10 @@ mod tests {
                             fields.iter().map(|f| (f.name().to_string(), f)).collect();
 
                         let x_field = field_map.get("x").expect("x field not found");
-                        assert_eq!(x_field.type_().name(), "f64");
+                        assert_eq!(x_field.type_().unwrap_type_ref().name(), "f64");
 
                         let y_field = field_map.get("y").expect("y field not found");
-                        assert_eq!(y_field.type_().name(), "f64");
+                        assert_eq!(y_field.type_().unwrap_type_ref().name(), "f64");
                     }
                     _ => panic!("Point should be a struct variant"),
                 }
@@ -1246,7 +1318,7 @@ mod tests {
                             let field = field_map
                                 .get(field_name)
                                 .expect(&format!("{field_name} field not found"));
-                            assert_eq!(field.type_().name(), "f64");
+                            assert_eq!(field.type_().unwrap_type_ref().name(), "f64");
                         }
                     }
                     _ => panic!("Line should be a struct variant"),

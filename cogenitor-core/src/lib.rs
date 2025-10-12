@@ -15,7 +15,9 @@ use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
     adapters::oas30::OAS30Spec,
-    codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
+    codemodel::{
+        EnumBuilder, Scope, function::FunctionBuilder, implementation::ImplementationBuilder,
+    },
     types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
 };
 
@@ -443,9 +445,9 @@ fn build_response_type<S: Spec>(
         "Error"
     };
 
-    let type_ref = match responses.len() {
-        0 => cm.type_unit(),
-        1 => {
+    let type_ref = match (build_for_success, responses.len()) {
+        (true, 0) => cm.type_unit(),
+        (true, 1) => {
             let single_response = responses.get(0).unwrap();
             let status_spec = single_response.0.clone();
             let content = single_response.1.resolve().resolve_fully().content();
@@ -466,6 +468,17 @@ fn build_response_type<S: Spec>(
                     content_enum_name(&method, path_name, &status_spec)
                 })?;
                 e = e.tuple_variant(&variant_name, vec![variant_type])?;
+            }
+
+            if !build_for_success {
+                e = e.tuple_variant_with_input(
+                    "UnknownResponse",
+                    vec![quote!(::http::Response<::std::vec::Vec<u8>>)],
+                )?;
+                e = e.tuple_variant_with_input(
+                    "OtherError",
+                    vec![quote!(::std::boxed::Box<dyn ::std::error::Error>)],
+                )?
             }
 
             m.insert_enum(e.build()?)?
