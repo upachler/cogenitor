@@ -1,0 +1,61 @@
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::hash::Hash;
+
+use openapiv3::ReferenceOr;
+
+use crate::{
+    adapters::oas30::{
+        MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, OAS30Spec, OperationSource,
+        SourceFromUri, into_oas30_content,
+    },
+    types::RequestBody,
+};
+
+impl SourceFromUri for RequestBodySource {
+    fn from_uri(uri: &str) -> Self {
+        RequestBodySource::Uri {
+            uri: uri.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq)]
+pub enum RequestBodySource {
+    Uri { uri: String },
+    Operation { source_ref: OperationSource },
+}
+
+impl OAS30Source for RequestBodySource {
+    type OAS30Type = openapiv3::RequestBody;
+
+    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
+    where
+        'a: 'b,
+    {
+        match self {
+            RequestBodySource::Uri { uri } => openapi.resolve_reference(uri).unwrap(),
+            RequestBodySource::Operation { source_ref } => source_ref
+                .inner(openapi)
+                .request_body
+                .as_ref()
+                .and_then(ReferenceOr::as_item)
+                .unwrap(),
+        }
+    }
+}
+
+impl RequestBody<OAS30Spec> for OAS30Pointer<RequestBodySource> {
+    fn content(&self) -> HashMap<String, OAS30Pointer<MediaTypeSource>> {
+        into_oas30_content(&self.inner().content, |content_index| OAS30Pointer {
+            openapi: self.openapi.clone(),
+            ref_source: MediaTypeSource::RequestBody {
+                ref_source: self.ref_source.clone(),
+                content_index,
+            },
+        })
+    }
+    fn required(&self) -> bool {
+        self.inner().required
+    }
+}

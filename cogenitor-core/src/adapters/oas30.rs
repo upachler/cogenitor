@@ -1,8 +1,7 @@
 mod components;
+mod request_body;
 mod schema;
 mod spec;
-
-pub use schema::*;
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -15,9 +14,12 @@ use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr};
 
 use crate::types::{
     ByReference, MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr, Reference,
-    RequestBody, Response, Spec, StatusSpec,
+    Response, Spec, StatusSpec,
 };
+
 pub use components::*;
+pub use request_body::*;
+pub use schema::*;
 pub use spec::*;
 
 trait OAS3Resolver<T> {
@@ -163,14 +165,6 @@ impl Eq for OAS30Reference {}
 
 trait SourceFromUri {
     fn from_uri(uri: &str) -> Self;
-}
-
-impl SourceFromUri for RequestBodySource {
-    fn from_uri(uri: &str) -> Self {
-        RequestBodySource::Uri {
-            uri: uri.to_string(),
-        }
-    }
 }
 
 impl<S: OAS30Source> Reference<OAS30Pointer<S>> for OAS30Reference
@@ -487,46 +481,6 @@ impl Parameter<OAS30Spec> for OAS30Pointer<ParameterSource> {
                 }))
             }
         }
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq)]
-pub enum RequestBodySource {
-    Uri { uri: String },
-    Operation { source_ref: OperationSource },
-}
-
-impl OAS30Source for RequestBodySource {
-    type OAS30Type = openapiv3::RequestBody;
-
-    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
-    where
-        'a: 'b,
-    {
-        match self {
-            RequestBodySource::Uri { uri } => openapi.resolve_reference(uri).unwrap(),
-            RequestBodySource::Operation { source_ref } => source_ref
-                .inner(openapi)
-                .request_body
-                .as_ref()
-                .and_then(ReferenceOr::as_item)
-                .unwrap(),
-        }
-    }
-}
-
-impl RequestBody<OAS30Spec> for OAS30Pointer<RequestBodySource> {
-    fn content(&self) -> HashMap<String, OAS30Pointer<MediaTypeSource>> {
-        into_oas30_content(&self.inner().content, |content_index| OAS30Pointer {
-            openapi: self.openapi.clone(),
-            ref_source: MediaTypeSource::RequestBody {
-                ref_source: self.ref_source.clone(),
-                content_index,
-            },
-        })
-    }
-    fn required(&self) -> bool {
-        self.inner().required
     }
 }
 
