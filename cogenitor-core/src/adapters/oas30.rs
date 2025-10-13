@@ -1,3 +1,4 @@
+mod components;
 mod schema;
 mod spec;
 
@@ -13,12 +14,11 @@ use indexmap::IndexMap;
 use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr};
 
 use crate::types::{
-    ByReference, Components, MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr,
-    Reference, RequestBody, Response, Spec, StatusSpec,
+    ByReference, MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr, Reference,
+    RequestBody, Response, Spec, StatusSpec,
 };
-#[cfg(test)]
-use crate::types::{Format, Schema};
-pub use spec::OAS30Spec;
+pub use components::*;
+pub use spec::*;
 
 trait OAS3Resolver<T> {
     fn resolve<'a, S>(&'a self, ro: &'a ReferenceOr<S>) -> Option<&'a T>
@@ -94,20 +94,6 @@ impl OAS3Resolver<openapiv3::Response> for openapiv3::OpenAPI {
     fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Response> {
         let ro = self.components.as_ref()?.responses.get(reference)?;
         self.resolve(ro)
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct ComponentsSource;
-
-impl OAS30Source for ComponentsSource {
-    type OAS30Type = openapiv3::Components;
-
-    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
-    where
-        'a: 'b,
-    {
-        openapi.components.as_ref().unwrap()
     }
 }
 
@@ -218,19 +204,6 @@ impl From<&openapiv3::Type> for crate::types::Type {
 
 impl<S: OAS30Source + SourceFromUri> ByReference for OAS30Pointer<S> {
     type Reference = OAS30Reference;
-}
-
-impl Components<OAS30Spec> for OAS30Pointer<ComponentsSource> {
-    fn schemas(&self) -> impl Iterator<Item = (String, RefOr<OAS30Pointer<SchemaSource>>)> {
-        self.inner().schemas.iter().map(|(name, schema_ro)| {
-            (
-                name.clone(),
-                into_ref_or(schema_ro, self, |_| {
-                    SchemaSource::Uri(format!("#/components/schemas/{name}"))
-                }),
-            )
-        })
-    }
 }
 
 // OAS30 PathItem Implementation
@@ -722,6 +695,9 @@ where
         }
     }
 }
+
+#[cfg(test)]
+use crate::types::{Format, Schema};
 
 #[test]
 fn test_empty() {
