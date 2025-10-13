@@ -3,12 +3,11 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use openapiv3::{ParameterSchemaOrContent, ReferenceOr, Type};
 
-use crate::adapters::oas30::{
-    MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, ParameterSource, SourceFromUri,
-};
+use super::super::{MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, SourceFromUri};
+use super::ParameterSource;
 use crate::types::{BooleanOrSchema, RefOr, Schema};
 
-use super::into_ref_or;
+use super::super::into_ref_or;
 
 #[derive(Clone)]
 pub enum SchemaSource {

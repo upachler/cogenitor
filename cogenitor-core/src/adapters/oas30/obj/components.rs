@@ -1,5 +1,6 @@
+use super::super::{OAS30Pointer, OAS30Source, into_ref_or};
 use super::OAS30Spec;
-use crate::adapters::oas30::{OAS30Pointer, OAS30Source, SchemaSource, into_ref_or};
+use super::SchemaSource;
 use crate::types::{Components, RefOr};
 use std::fmt::Debug;
 use std::hash::Hash;

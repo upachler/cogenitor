@@ -4,10 +4,11 @@ use std::hash::Hash;
 
 use openapiv3::{ParameterSchemaOrContent, ReferenceOr};
 
-use crate::adapters::oas30::{
-    MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, OAS30Spec, OperationSource,
-    PathItemSource, SchemaSource, SourceFromUri, into_oas30_content, into_ref_or,
+use super::super::{
+    MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, SourceFromUri, into_oas30_content,
+    into_ref_or,
 };
+use super::{OAS30Spec, OperationSource, PathItemSource, SchemaSource};
 use crate::types::{Parameter, ParameterLocation, RefOr};
 
 pub fn to_parameters_iter(

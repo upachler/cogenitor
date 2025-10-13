@@ -3,10 +3,8 @@ use std::hash::Hash;
 
 use http::Method;
 
-use crate::adapters::oas30::{
-    OAS3Resolver, OAS30Pointer, OAS30Source, OAS30Spec, OperationSource, ParameterSource,
-    to_parameters_iter,
-};
+use super::super::{OAS3Resolver, OAS30Pointer, OAS30Source, to_parameters_iter};
+use super::{OAS30Spec, OperationSource, ParameterSource};
 use crate::types::{PathItem, RefOr};
 
 // OAS30 PathItem Implementation

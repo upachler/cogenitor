@@ -3,10 +3,8 @@ use std::hash::Hash;
 
 use http::Method;
 
-use crate::adapters::oas30::{
-    OAS30Pointer, OAS30Source, OAS30Spec, ParameterSource, PathItemSource, RequestBodySource,
-    ResponseSource, into_ref_or, to_parameters_iter,
-};
+use super::super::{OAS30Pointer, OAS30Source, ResponseSource, into_ref_or, to_parameters_iter};
+use super::{OAS30Spec, ParameterSource, PathItemSource, RequestBodySource};
 use crate::types::{Operation, RefOr, Spec, StatusSpec};
 
 #[derive(Debug, Clone, Hash, PartialEq)]

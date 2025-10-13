@@ -4,9 +4,10 @@ use std::str::FromStr;
 
 use openapiv3::{OpenAPI, ReferenceOr};
 
-use crate::adapters::oas30::{
-    ComponentsSource, MediaTypeSource, OAS30Pointer, OperationSource, ParameterSource,
-    PathItemSource, RequestBodySource, ResponseSource, SchemaSource,
+use super::super::{MediaTypeSource, OAS30Pointer, ResponseSource};
+use super::{
+    ComponentsSource, OperationSource, ParameterSource, PathItemSource, RequestBodySource,
+    SchemaSource,
 };
 use crate::types::{Components, RefOr};
 

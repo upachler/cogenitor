@@ -1,10 +1,4 @@
-mod components;
-mod operation;
-mod parameter;
-mod path_item;
-mod request_body;
-mod schema;
-mod spec;
+mod obj;
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -19,13 +13,7 @@ use crate::types::{
     StatusSpec,
 };
 
-pub use components::*;
-pub use operation::*;
-pub use parameter::*;
-pub use path_item::*;
-pub use request_body::*;
-pub use schema::*;
-pub use spec::*;
+pub use obj::*;
 
 trait OAS3Resolver<T> {
     fn resolve<'a, S>(&'a self, ro: &'a ReferenceOr<S>) -> Option<&'a T>

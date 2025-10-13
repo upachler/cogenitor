@@ -4,13 +4,11 @@ use std::hash::Hash;
 
 use openapiv3::ReferenceOr;
 
-use crate::{
-    adapters::oas30::{
-        MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, OAS30Spec, OperationSource,
-        SourceFromUri, into_oas30_content,
-    },
-    types::RequestBody,
+use super::super::{
+    MediaTypeSource, OAS3Resolver, OAS30Pointer, OAS30Source, SourceFromUri, into_oas30_content,
 };
+use super::{OAS30Spec, OperationSource};
+use crate::types::RequestBody;
 
 impl SourceFromUri for RequestBodySource {
     fn from_uri(uri: &str) -> Self {
