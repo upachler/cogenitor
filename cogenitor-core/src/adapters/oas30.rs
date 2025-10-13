@@ -1,4 +1,7 @@
 mod components;
+mod operation;
+mod parameter;
+mod path_item;
 mod request_body;
 mod schema;
 mod spec;
@@ -8,16 +11,18 @@ use std::hash::Hash;
 use std::str::FromStr;
 use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
-use http::Method;
 use indexmap::IndexMap;
 use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr};
 
 use crate::types::{
-    ByReference, MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr, Reference,
-    Response, Spec, StatusSpec,
+    ByReference, MediaType, Parameter, ParameterLocation, RefOr, Reference, Response, Spec,
+    StatusSpec,
 };
 
 pub use components::*;
+pub use operation::*;
+pub use parameter::*;
+pub use path_item::*;
 pub use request_body::*;
 pub use schema::*;
 pub use spec::*;
@@ -198,290 +203,6 @@ impl From<&openapiv3::Type> for crate::types::Type {
 
 impl<S: OAS30Source + SourceFromUri> ByReference for OAS30Pointer<S> {
     type Reference = OAS30Reference;
-}
-
-// OAS30 PathItem Implementation
-#[derive(Clone, Debug, PartialEq, Hash, Eq)]
-pub struct PathItemSource {
-    path: String,
-}
-
-type OAS30PathItemPointer = OAS30Pointer<PathItemSource>;
-
-pub struct OAS30ParametersRef {}
-
-fn to_parameters_iter(
-    parent: &OAS30Pointer<impl OAS30Source>,
-    oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,
-    parameter_source_factory: impl Fn(ParameterLocalId) -> ParameterSource,
-) -> impl Iterator<Item = RefOr<OAS30Pointer<ParameterSource>>> {
-    let mut params = Vec::new();
-    for param_ref in oas30_parameters {
-        let p = into_ref_or(param_ref, &parent, |_src| {
-            let param = param_ref.as_item().unwrap();
-            let param_id = ParameterLocalId {
-                location: extract_location(&param),
-                param_name: param.parameter_data_ref().name.clone(),
-            };
-            parameter_source_factory(param_id)
-        });
-        params.push(p);
-    }
-    params.into_iter()
-}
-
-impl OAS30Source for PathItemSource {
-    type OAS30Type = openapiv3::PathItem;
-
-    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
-    where
-        'a: 'b,
-    {
-        let ro_opt = openapi.paths.paths.get(&self.path);
-        ro_opt.and_then(|ro| openapi.resolve(ro)).unwrap()
-    }
-}
-
-impl PathItem<OAS30Spec> for OAS30PathItemPointer {
-    fn operations_iter(&self) -> impl Iterator<Item = (Method, OAS30Pointer<OperationSource>)> {
-        let path_item = self.inner();
-        vec![
-            (Method::GET, &path_item.get),
-            (Method::PUT, &path_item.put),
-            (Method::POST, &path_item.post),
-            (Method::DELETE, &path_item.delete),
-            (Method::OPTIONS, &path_item.options),
-            (Method::HEAD, &path_item.head),
-            (Method::PATCH, &path_item.patch),
-            (Method::TRACE, &path_item.trace),
-        ]
-        .into_iter()
-        .filter_map(|(method, operation_opt)| operation_opt.as_ref().map(|_operation| method))
-        .map(|method| {
-            let ref_source = OperationSource {
-                path_item: self.ref_source.clone(),
-                method: method.clone(),
-            };
-            (
-                method,
-                OAS30Pointer {
-                    openapi: self.openapi.clone(),
-                    ref_source,
-                },
-            )
-        })
-    }
-
-    fn parameters(&self) -> impl Iterator<Item = RefOr<OAS30Pointer<ParameterSource>>> {
-        to_parameters_iter(self, &self.inner().parameters, |param_id| {
-            ParameterSource::PathItem {
-                source_ref: self.ref_source.clone(),
-                param_id,
-            }
-        })
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq)]
-pub struct OperationSource {
-    path_item: PathItemSource,
-    method: http::Method,
-}
-
-impl OAS30Source for OperationSource {
-    type OAS30Type = openapiv3::Operation;
-
-    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
-    where
-        'a: 'b,
-    {
-        let path_item = self.path_item.inner(openapi);
-
-        let op = match self.method {
-            Method::GET => &path_item.get,
-            Method::DELETE => &path_item.delete,
-            Method::HEAD => &path_item.head,
-            Method::OPTIONS => &path_item.options,
-            Method::PATCH => &path_item.patch,
-            Method::POST => &path_item.post,
-            Method::PUT => &path_item.put,
-            Method::TRACE => &path_item.trace,
-            _ => panic!("unhandled method {:?}", self.method),
-        };
-        op.as_ref().unwrap()
-    }
-}
-
-impl Operation<OAS30Spec> for OAS30Pointer<OperationSource> {
-    fn parameters(&self) -> impl Iterator<Item = RefOr<OAS30Pointer<ParameterSource>>> {
-        let source_ref = &self.ref_source;
-        to_parameters_iter(self, &self.inner().parameters, |param_id| {
-            ParameterSource::Operation {
-                source_ref: source_ref.clone(),
-                param_id,
-            }
-        })
-    }
-
-    fn operation_id(&self) -> Option<&str> {
-        self.inner().operation_id.as_deref()
-    }
-
-    fn request_body(&self) -> Option<RefOr<OAS30Pointer<RequestBodySource>>> {
-        self.inner().request_body.as_ref().map(|request_body| {
-            into_ref_or(request_body, self, |src| RequestBodySource::Operation {
-                source_ref: src.clone(),
-            })
-        })
-    }
-
-    fn responses(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            crate::types::StatusSpec,
-            RefOr<<OAS30Spec as Spec>::Response>,
-        ),
-    > {
-        self.inner().responses.responses.iter().enumerate().map(
-            |(content_index, (status, ro_response))| {
-                let status = StatusSpec::try_from(status).unwrap();
-                (
-                    status.clone(),
-                    into_ref_or(ro_response, self, |src| ResponseSource::Operation {
-                        content_index,
-                        ref_source: src.clone(),
-                    }),
-                )
-            },
-        )
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq)]
-pub struct ParameterLocalId {
-    param_name: String,
-    location: ParameterLocation,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ParameterSource {
-    Uri {
-        uri: String,
-    },
-    Operation {
-        source_ref: OperationSource,
-        param_id: ParameterLocalId,
-    },
-    PathItem {
-        source_ref: PathItemSource,
-        param_id: ParameterLocalId,
-    },
-}
-
-impl SourceFromUri for ParameterSource {
-    fn from_uri(uri: &str) -> Self {
-        ParameterSource::Uri {
-            uri: uri.to_string(),
-        }
-    }
-}
-impl Hash for ParameterSource {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        core::mem::discriminant(self).hash(state);
-    }
-}
-
-fn extract_location(param: &openapiv3::Parameter) -> ParameterLocation {
-    match param {
-        openapiv3::Parameter::Query { .. } => ParameterLocation::Query,
-        openapiv3::Parameter::Header { .. } => ParameterLocation::Header,
-        openapiv3::Parameter::Path { .. } => ParameterLocation::Path,
-        openapiv3::Parameter::Cookie { .. } => ParameterLocation::Cookie,
-    }
-}
-
-impl ParameterSource {
-    fn extract_param<'a>(
-        params: &'a Vec<ReferenceOr<openapiv3::Parameter>>,
-        param_id: &ParameterLocalId,
-    ) -> &'a openapiv3::Parameter {
-        params
-            .iter()
-            .find(|p| {
-                let p = p.as_item().unwrap();
-                let loc = extract_location(p);
-                let pd = p.parameter_data_ref();
-                pd.name == param_id.param_name && loc == param_id.location
-            })
-            .unwrap()
-            .as_item()
-            .unwrap()
-    }
-}
-
-impl OAS30Source for ParameterSource {
-    type OAS30Type = openapiv3::Parameter;
-
-    fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
-    where
-        'a: 'b,
-    {
-        match self {
-            ParameterSource::Uri { uri } => openapi.resolve_reference(uri).unwrap(),
-            ParameterSource::Operation {
-                source_ref,
-                param_id,
-            } => Self::extract_param(&source_ref.inner(openapi).parameters, param_id),
-            ParameterSource::PathItem {
-                source_ref,
-                param_id,
-            } => Self::extract_param(&source_ref.inner(openapi).parameters, param_id),
-        }
-    }
-}
-
-impl Parameter<OAS30Spec> for OAS30Pointer<ParameterSource> {
-    fn in_(&self) -> ParameterLocation {
-        extract_location(self.ref_source.inner(&self.openapi))
-    }
-
-    fn name(&self) -> &str {
-        &self
-            .ref_source
-            .inner(&self.openapi)
-            .parameter_data_ref()
-            .name
-    }
-
-    fn schema(&self) -> Option<RefOr<OAS30Pointer<SchemaSource>>> {
-        if let ParameterSchemaOrContent::Schema(schema_ref) =
-            &self.inner().parameter_data_ref().format
-        {
-            Some(into_ref_or(schema_ref, self, |src| {
-                SchemaSource::OperationParam(Box::new(src.clone()))
-            }))
-        } else {
-            None
-        }
-    }
-
-    fn content(&self) -> Option<HashMap<String, OAS30Pointer<MediaTypeSource>>> {
-        match &self.inner().parameter_data_ref().format {
-            ParameterSchemaOrContent::Schema(_reference_or) => None,
-            ParameterSchemaOrContent::Content(index_map) => {
-                Some(into_oas30_content(index_map, |content_index| {
-                    OAS30Pointer {
-                        openapi: self.openapi.clone(),
-                        ref_source: MediaTypeSource::Parameter {
-                            ref_source: self.ref_source.clone(),
-                            content_index,
-                        },
-                    }
-                }))
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq)]
@@ -742,7 +463,7 @@ fn type_of(s: &impl Schema) -> Option<crate::types::Type> {
 #[cfg(test)]
 #[test]
 fn test_simple_paths() {
-    use crate::types::Spec;
+    use crate::types::{Operation, PathItem, Spec};
     use http::Method;
 
     let oas = r"
@@ -872,6 +593,10 @@ components:
 #[cfg(test)]
 fn test_path_parameters_impl(spec: impl Spec) {
     // Test path_iter() implementation - should return exactly one parameterized path
+
+    use http::Method;
+
+    use crate::types::{Operation, PathItem};
     let paths: Vec<_> = spec.paths().collect();
     assert_eq!(paths.len(), 1);
 
