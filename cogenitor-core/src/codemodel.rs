@@ -232,7 +232,7 @@ impl FieldListBuilder {
         Ok(self)
     }
 
-    pub fn build(self) -> Vec<Field> {
+    pub(crate) fn build(self) -> Vec<Field> {
         self.fields
     }
 }
@@ -303,26 +303,10 @@ pub(crate) enum TypeRefOrTokenStream {
     TypeRef(TypeRef),
     TokenStream(TokenStream),
 }
-impl TypeRefOrTokenStream {
-    pub(crate) fn unwrap_type_ref(&self) -> &TypeRef {
-        if let TypeRefOrTokenStream::TypeRef(type_ref) = self {
-            type_ref
-        } else {
-            panic!("expected TypeRef variant, encountered {self:?}")
-        }
-    }
-    pub(crate) fn unwrap_token_stream(&self) -> &TokenStream {
-        if let TypeRefOrTokenStream::TokenStream(token_stream) = self {
-            token_stream
-        } else {
-            panic!("expected TokenStream variant, encountered {self:?}")
-        }
-    }
-}
 
 /// Represents the data associated with an enum variant
 #[derive(Debug)]
-pub enum EnumVariantData {
+pub(crate) enum EnumVariantData {
     /// Unit variant (e.g., `Red`)
     Unit,
     /// Tuple variant (e.g., `Color(u8, u8, u8)`)
@@ -339,7 +323,7 @@ pub struct EnumVariant {
 }
 
 impl EnumVariant {
-    pub fn data(&self) -> &EnumVariantData {
+    pub(crate) fn data(&self) -> &EnumVariantData {
         &self.data
     }
 }
@@ -735,7 +719,7 @@ pub trait NamedItem {
 }
 
 #[derive(Debug)]
-pub struct Field {
+pub(crate) struct Field {
     pub name: String,
     pub type_ref_or_ts: TypeRefOrTokenStream,
 }
@@ -759,7 +743,7 @@ pub struct Struct {
 }
 
 impl Struct {
-    pub fn field_iter(&self) -> impl Iterator<Item = &Field> {
+    pub(crate) fn field_iter(&self) -> impl Iterator<Item = &Field> {
         self.field_list.iter()
     }
 
@@ -1041,6 +1025,23 @@ mod tests {
     use quote::quote;
 
     use crate::codemodel::*;
+
+    impl TypeRefOrTokenStream {
+        pub(crate) fn unwrap_type_ref(&self) -> &TypeRef {
+            if let TypeRefOrTokenStream::TypeRef(type_ref) = self {
+                type_ref
+            } else {
+                panic!("expected TypeRef variant, encountered {self:?}")
+            }
+        }
+        pub(crate) fn unwrap_token_stream(&self) -> &TokenStream {
+            if let TypeRefOrTokenStream::TokenStream(token_stream) = self {
+                token_stream
+            } else {
+                panic!("expected TokenStream variant, encountered {self:?}")
+            }
+        }
+    }
 
     #[test]
     fn test_crates_and_mods() -> Result<(), anyhow::Error> {

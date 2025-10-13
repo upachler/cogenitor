@@ -137,6 +137,7 @@ impl PartialEq for SchemaSource {
                 todo!("this is broken, needs to compare path properly");
                 // For simplicity, we consider all inline schemas as different
                 // A proper implementation would compare schema content
+                #[allow(unreachable_code)]
                 false
             }
             (SchemaSource::MediaType(s), SchemaSource::MediaType(o)) => s.eq(o),
@@ -326,8 +327,8 @@ impl Schema for OAS30Pointer<SchemaSource> {
         match &self.inner().schema_kind {
             SchemaKind::Type(Type::Object(t)) => {
                 for (k, v) in t.properties.iter() {
-                    let ro = into_ref_or(&v, self, |p| {
-                        SchemaSource::SchemaProperty((Box::new(p.clone()), k.clone()))
+                    let ro = into_ref_or(&v, self, |src| {
+                        SchemaSource::SchemaProperty((Box::new(src.clone()), k.clone()))
                     });
                     m.insert(k.to_string(), ro);
                 }
@@ -337,7 +338,7 @@ impl Schema for OAS30Pointer<SchemaSource> {
         m
     }
 
-    fn pattern_properties(&self) -> std::collections::HashMap<String, RefOr<Self>> {
+    fn pattern_properties(&self) -> std::collections::HashMap<String, RefOr<impl Schema>> {
         HashMap::<_, RefOr<OAS30SchemaPointer>>::new()
     }
 
@@ -369,8 +370,8 @@ impl Schema for OAS30Pointer<SchemaSource> {
         match &self.inner().schema_kind {
             openapiv3::SchemaKind::Type(openapiv3::Type::Array(a)) => {
                 if let Some(ro_items) = &a.items {
-                    Some(vec![into_ref_or(ro_items, self, |p| {
-                        SchemaSource::Items(Box::new(p.clone()))
+                    Some(vec![into_ref_or(ro_items, self, |src| {
+                        SchemaSource::Items(Box::new(src.clone()))
                     })])
                 } else {
                     None

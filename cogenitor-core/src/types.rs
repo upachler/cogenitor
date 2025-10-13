@@ -72,6 +72,7 @@ Represents a schema for validating a JSON data item.
 We use this for type generation, so only fields relevant for this purpose are implemented.
 See https://spec.openapis.org/oas/v3.0.4.html#schema-object
 */
+#[allow(unused)]
 pub trait Schema: Clone + std::fmt::Debug + std::hash::Hash + Eq + ByReference {
     /**
     If this schema is named (i.e. a YAML/JSON key is associated with its definition),
@@ -127,6 +128,7 @@ pub trait PathItem<S: Spec> {
 }
 
 // see https://spec.openapis.org/oas/v3.0.4.html#x4-7-10
+#[allow(unused)]
 pub trait Operation<S: Spec> {
     // see 'parameters' in  https://spec.openapis.org/oas/v3.0.4.html#x4-7-10-1-fixed-fields
     fn parameters(&self) -> impl Iterator<Item = RefOr<S::Parameter>>;
@@ -174,6 +176,7 @@ pub trait Parameter<S: Spec>: ByReference + Clone {
 }
 
 /// see https://spec.openapis.org/oas/v3.0.4.html#request-body-object
+#[allow(unused)]
 pub trait RequestBody<S: Spec>: ByReference + Clone {
     fn content(&self) -> HashMap<String, S::MediaType>;
     fn required(&self) -> bool;

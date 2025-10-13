@@ -233,32 +233,6 @@ impl Components<OAS30Spec> for OAS30Pointer<ComponentsSource> {
     }
 }
 
-// Path Iterator Implementation
-struct PathIterator {
-    paths: Vec<String>,
-    current: usize,
-    openapi: Rc<OpenAPI>,
-}
-
-impl Iterator for PathIterator {
-    type Item = (String, OAS30PathItemPointer);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let path = self.paths.get(self.current);
-        if let Some(path) = path {
-            self.current += 1;
-            return Some((
-                path.clone(),
-                OAS30PathItemPointer {
-                    ref_source: PathItemSource { path: path.clone() },
-                    openapi: self.openapi.clone(),
-                },
-            ));
-        }
-        None
-    }
-}
-
 // OAS30 PathItem Implementation
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct PathItemSource {
@@ -276,7 +250,7 @@ fn to_parameters_iter(
 ) -> impl Iterator<Item = RefOr<OAS30Pointer<ParameterSource>>> {
     let mut params = Vec::new();
     for param_ref in oas30_parameters {
-        let p = into_ref_or(param_ref, &parent, |p| {
+        let p = into_ref_or(param_ref, &parent, |_src| {
             let param = param_ref.as_item().unwrap();
             let param_id = ParameterLocalId {
                 location: extract_location(&param),
@@ -388,8 +362,8 @@ impl Operation<OAS30Spec> for OAS30Pointer<OperationSource> {
 
     fn request_body(&self) -> Option<RefOr<OAS30Pointer<RequestBodySource>>> {
         self.inner().request_body.as_ref().map(|request_body| {
-            into_ref_or(request_body, self, |_p| RequestBodySource::Operation {
-                source_ref: self.ref_source.clone(),
+            into_ref_or(request_body, self, |src| RequestBodySource::Operation {
+                source_ref: src.clone(),
             })
         })
     }
@@ -407,11 +381,9 @@ impl Operation<OAS30Spec> for OAS30Pointer<OperationSource> {
                 let status = StatusSpec::try_from(status).unwrap();
                 (
                     status.clone(),
-                    into_ref_or(ro_response, self, |p: &OperationSource| {
-                        ResponseSource::Operation {
-                            content_index,
-                            ref_source: p.clone(),
-                        }
+                    into_ref_or(ro_response, self, |src| ResponseSource::Operation {
+                        content_index,
+                        ref_source: src.clone(),
                     }),
                 )
             },
@@ -519,8 +491,8 @@ impl Parameter<OAS30Spec> for OAS30Pointer<ParameterSource> {
         if let ParameterSchemaOrContent::Schema(schema_ref) =
             &self.inner().parameter_data_ref().format
         {
-            Some(into_ref_or(schema_ref, self, |p| {
-                SchemaSource::OperationParam(Box::new(self.ref_source.clone()))
+            Some(into_ref_or(schema_ref, self, |src| {
+                SchemaSource::OperationParam(Box::new(src.clone()))
             }))
         } else {
             None
@@ -678,7 +650,7 @@ impl OAS30Source for MediaTypeSource {
                 ref_source,
                 content_index,
             } => match &ref_source.inner(openapi).parameter_data_ref().format {
-                ParameterSchemaOrContent::Schema(reference_or) => panic!(
+                ParameterSchemaOrContent::Schema(_reference_or) => panic!(
                     "source was initialized for invalid parameter with 'schema' property, not 'content'"
                 ),
                 ParameterSchemaOrContent::Content(index_map) => (index_map, content_index),
@@ -710,10 +682,11 @@ fn into_oas30_content(
 
 impl MediaType<OAS30Spec> for OAS30Pointer<MediaTypeSource> {
     fn schema(&self) -> Option<RefOr<OAS30Pointer<SchemaSource>>> {
-        self.inner()
-            .schema
-            .as_ref()
-            .map(|m| into_ref_or(m, &self, |p| SchemaSource::MediaType(Box::new(p.clone()))))
+        self.inner().schema.as_ref().map(|m| {
+            into_ref_or(m, &self, |src| {
+                SchemaSource::MediaType(Box::new(src.clone()))
+            })
+        })
     }
 }
 

@@ -1,4 +1,4 @@
-use cogenitor_core::{ApiConfig, adapters::oas30::OAS30Spec};
+use cogenitor_core::ApiConfig;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 

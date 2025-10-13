@@ -5,8 +5,7 @@ use quote::quote;
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek},
-    path::{Path, is_separator},
-    ptr::read,
+    path::Path,
 };
 use syn::Ident;
 
@@ -15,9 +14,7 @@ use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
     adapters::oas30::OAS30Spec,
-    codemodel::{
-        EnumBuilder, Scope, function::FunctionBuilder, implementation::ImplementationBuilder,
-    },
+    codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
     types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
 };
 
@@ -79,6 +76,7 @@ pub fn generate_from_path(path: &Path) -> anyhow::Result<TokenStream> {
     generate_from_reader(&mut file)
 }
 
+#[allow(unused)]
 fn generate_from_str<S: Spec>(s: &str) -> anyhow::Result<TokenStream> {
     generate_from_reader(Cursor::new(s.as_bytes()))
 }

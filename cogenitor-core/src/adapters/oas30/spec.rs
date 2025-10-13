@@ -62,7 +62,7 @@ impl crate::Spec for OAS30Spec {
             .paths
             .iter()
             .filter_map(|(path, path_item_ref)| {
-                if let ReferenceOr::Item(path_item) = path_item_ref {
+                if let ReferenceOr::Item(_path_item) = path_item_ref {
                     Some(path.clone())
                 } else {
                     None
