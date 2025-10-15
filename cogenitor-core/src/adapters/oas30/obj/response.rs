@@ -10,6 +10,17 @@ use crate::{
     types::{Response, Spec},
 };
 
+impl OAS3Resolver<openapiv3::Response> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &'static str {
+        "#/components/responses/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Response> {
+        let ro = self.components.as_ref()?.responses.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub enum ResponseSource {
     Uri {

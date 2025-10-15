@@ -9,6 +9,16 @@ use crate::types::{BooleanOrSchema, RefOr, Schema};
 
 use super::super::into_ref_or;
 
+impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Schema> {
+        let ro = self.components.as_ref()?.schemas.get(reference)?;
+        self.resolve(ro)
+    }
+    fn prefix(&self) -> &'static str {
+        "#/components/schemas/"
+    }
+}
+
 #[derive(Clone)]
 pub enum SchemaSource {
     Uri(String),

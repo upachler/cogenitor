@@ -10,6 +10,17 @@ use crate::adapters::oas30::{
 };
 use crate::types::{Parameter, ParameterLocation, RefOr};
 
+impl OAS3Resolver<openapiv3::Parameter> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &'static str {
+        "#/components/parameters/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Parameter> {
+        let ro = self.components.as_ref()?.parameters.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
 pub fn to_parameters_iter(
     parent: &OAS30Pointer<impl OAS30Source>,
     oas30_parameters: &Vec<openapiv3::ReferenceOr<openapiv3::Parameter>>,

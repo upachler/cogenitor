@@ -10,6 +10,17 @@ use super::super::{
 use super::{OAS30Spec, OperationSource};
 use crate::types::RequestBody;
 
+impl OAS3Resolver<openapiv3::RequestBody> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &'static str {
+        "#/components/requestBodies/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::RequestBody> {
+        let ro = self.components.as_ref()?.request_bodies.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
 impl SourceFromUri for RequestBodySource {
     fn from_uri(uri: &str) -> Self {
         RequestBodySource::Uri {

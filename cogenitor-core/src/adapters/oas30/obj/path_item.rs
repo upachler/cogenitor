@@ -7,6 +7,17 @@ use super::super::{OAS3Resolver, OAS30Pointer, OAS30Source, to_parameters_iter};
 use super::{OAS30Spec, OperationSource, ParameterSource};
 use crate::types::{PathItem, RefOr};
 
+impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
+    fn prefix(&self) -> &'static str {
+        "#/paths/"
+    }
+
+    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::PathItem> {
+        let ro = self.paths.paths.get(reference)?;
+        self.resolve(ro)
+    }
+}
+
 // OAS30 PathItem Implementation
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct PathItemSource {

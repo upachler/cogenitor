@@ -6,19 +6,22 @@ mod test;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::str::FromStr;
-use std::{borrow::Borrow, collections::HashMap, rc::Rc};
+use std::{borrow::Borrow, rc::Rc};
 
-use indexmap::IndexMap;
-use openapiv3::{OpenAPI, ParameterSchemaOrContent, ReferenceOr};
+use openapiv3::{OpenAPI, ReferenceOr};
 
-use crate::types::{
-    ByReference, MediaType, Parameter, ParameterLocation, RefOr, Reference, Response, Spec,
-    StatusSpec,
-};
+use crate::types::{ByReference, RefOr, Reference, StatusSpec};
 
 pub use obj::*;
 
+/// provides means to resolve `openapiv3` OAS objects from URI or `ReferenceOr<T>` instances.
+/// For each
 trait OAS3Resolver<T> {
+    /// Resolve the `openapiv3` object of type `T` in `ReferenceOr<T>` to `&T` for both cases:
+    /// * If `ReferenceOr<T>` is an actual schema object `T`, the reference `&T` is returned, wrapped in `Some`.
+    /// * Otherwise `ReferenceOr<T>` is a reference (e.g. `#/components/schemas/Pet`). This reference
+    ///   is resolved by calling `Self::resolve_reference(uri)`. If that reference proves unresolveable,
+    ///   `None` is returned.
     fn resolve<'a, S>(&'a self, ro: &'a ReferenceOr<S>) -> Option<&'a T>
     where
         S: Borrow<T>,
@@ -37,64 +40,25 @@ trait OAS3Resolver<T> {
         }
     }
 
-    fn prefix(&self) -> &str;
+    /// Yield base URI for the particular `T` we allow to resolve here
+    fn prefix(&self) -> &'static str;
+
+    /// Attempt to resolve the specified URI reference into an actual
+    /// reference to `T`
     fn resolve_reference(&self, reference: &str) -> Option<&T>;
 }
 
-impl OAS3Resolver<openapiv3::Schema> for openapiv3::OpenAPI {
-    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Schema> {
-        let ro = self.components.as_ref()?.schemas.get(reference)?;
-        self.resolve(ro)
-    }
-    fn prefix(&self) -> &'static str {
-        "#/components/schemas/"
-    }
-}
-
-impl OAS3Resolver<openapiv3::PathItem> for openapiv3::OpenAPI {
-    fn prefix(&self) -> &'static str {
-        "#/paths/"
-    }
-
-    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::PathItem> {
-        let ro = self.paths.paths.get(reference)?;
-        self.resolve(ro)
-    }
-}
-
-impl OAS3Resolver<openapiv3::Parameter> for openapiv3::OpenAPI {
-    fn prefix(&self) -> &str {
-        "#/components/parameters/"
-    }
-
-    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Parameter> {
-        let ro = self.components.as_ref()?.parameters.get(reference)?;
-        self.resolve(ro)
-    }
-}
-
-impl OAS3Resolver<openapiv3::RequestBody> for openapiv3::OpenAPI {
-    fn prefix(&self) -> &str {
-        "#/components/requestBodies/"
-    }
-
-    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::RequestBody> {
-        let ro = self.components.as_ref()?.request_bodies.get(reference)?;
-        self.resolve(ro)
-    }
-}
-
-impl OAS3Resolver<openapiv3::Response> for openapiv3::OpenAPI {
-    fn prefix(&self) -> &str {
-        "#/components/responses/"
-    }
-
-    fn resolve_reference(&self, reference: &str) -> Option<&openapiv3::Response> {
-        let ro = self.components.as_ref()?.responses.get(reference)?;
-        self.resolve(ro)
-    }
-}
-
+/// An abstract source to the `openapiv3` schema object type specfied in the `OAS30Type`.
+/// Typically, this trait is implemented by an enum with variants for each
+/// position in a OAS 3.0 spec document structure where a particular
+/// schema object may occur. For instance, a `openapiv3::Schema` may occur
+/// in `#/components/schemas`, below a `MediaType` object, or inside the
+/// properties of another `Schema`, among other places. The enum lists all such
+/// places, while the variants may store additional information, like the name of the
+/// name of the schema located below `#/components/schemas/`, or the name of the
+/// property and the source to the parent schema.
+///
+/// Access to the actual schema object instance is provided via the `inner()` method.
 pub trait OAS30Source: std::fmt::Debug + Hash + PartialEq {
     type OAS30Type;
     fn inner<'a, 'b>(&'a self, openapi: &'b openapiv3::OpenAPI) -> &'b Self::OAS30Type
@@ -104,7 +68,7 @@ pub trait OAS30Source: std::fmt::Debug + Hash + PartialEq {
 
 #[derive(Clone)]
 pub struct OAS30Pointer<S: OAS30Source> {
-    openapi: Rc<OpenAPI>, // TODO: remove openapi field, likely not needed
+    openapi: Rc<OpenAPI>,
     ref_source: S,
 }
 
