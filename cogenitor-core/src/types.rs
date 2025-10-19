@@ -2,7 +2,7 @@ use std::{collections::HashMap, io, num::ParseIntError, str::FromStr, string::Pa
 
 use json::JsonValue;
 
-/** An implementation of an OAS spec, specific to our needs for code generation */
+/// An implementation of an OAS spec, specific to our needs for code generation
 pub trait Spec: FromStr<Err = anyhow::Error> {
     type Schema: Schema;
     type Components: Components<Self>;
@@ -192,8 +192,15 @@ pub trait MediaType<S: Spec> {
     fn schema(&self) -> Option<RefOr<S::Schema>>;
 }
 
-/// types implementing Reference contain the path in the OAS tree
-/// as well as the means necessary to resolve that path
+/// Types implementing `Reference` contain the path in the OAS tree
+/// as well as the means necessary to resolve that path.
+/// Effectively, a type implementing `Reference` encapsulates
+/// the URI (e.g. `#/components/schemas/Pet`) and a handle to the
+/// underlying OpenAPI data structure. The `resolve()` method
+/// performs the actual resolution. Note that `Reference`s
+/// are meant to be infallible: Implemenations assume that the
+/// URIs they were constructed from can _always_ be resolved
+/// successfully.
 pub trait Reference<T>: PartialEq + Eq + Clone + std::fmt::Debug
 where
     T: ByReference,
@@ -205,10 +212,58 @@ where
     fn uri(&self) -> &str;
 }
 
+/// Marker trait for for OAS object traits that also support
+/// being available via references. For instance [Schema]
+/// will implement [ByReference], as it is available via
+/// `$ref` in an OAS document, but [Operation] will not.
 pub trait ByReference: Sized {
     type Reference: Reference<Self>;
 }
 
+/// Implementation of the OAS 'reference or ... object' pattern.
+///
+/// Several (but by far not all) OAS objects can be referenced
+/// by URIs via the `$ref` keyword. For instance, a parameter
+/// type can be expressed by an inline schema
+///
+/// ```
+/// paths:
+///   'baz'
+///     get:
+///      parameters:
+///      - name: foo
+///         schema:
+///           type: object
+///           properties:
+///             bar:
+///               type: string
+///  ```
+///
+/// or by a reference to a named schema:
+///
+/// ```
+/// paths:
+///   'baz'
+///     get:
+///      parameters:
+///      - name: foo
+///         schema:
+///           $ref: '#/components/schemas/Foo'
+/// ...
+///
+/// components:
+///   schemas:
+///     Foo:
+///       type: object
+///       properties:
+///         bar:
+///           type: string
+/// ```
+///
+/// So the 'schema' property in 'parameters' allows _either_ a reference _or_ an inlined OAS object.
+/// This is true for several other OAS objects as well. Therefore, `RefOr` implements this pattern;
+/// it's variants implement the reference and the inline object case.
+///
 #[derive(Clone, Debug)]
 pub enum RefOr<O>
 where
