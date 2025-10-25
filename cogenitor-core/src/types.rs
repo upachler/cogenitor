@@ -226,7 +226,7 @@ pub trait ByReference: Sized {
 /// by URIs via the `$ref` keyword. For instance, a parameter
 /// type can be expressed by an inline schema
 ///
-/// ```
+/// ```yaml
 /// paths:
 ///   'baz'
 ///     get:
@@ -241,7 +241,7 @@ pub trait ByReference: Sized {
 ///
 /// or by a reference to a named schema:
 ///
-/// ```
+/// ```yaml
 /// paths:
 ///   'baz'
 ///     get:
