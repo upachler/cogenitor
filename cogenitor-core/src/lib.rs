@@ -29,12 +29,12 @@ mod test;
 
 pub mod adapters;
 
-// Structure to hold key-value pair arguments
+/// Configuration settings for OpenAPI code generation.
 #[derive(Default, Debug, PartialEq)]
 pub struct ApiConfig {
+    /// Path to the input OpenAPI spec from which we want to generate code from
     pub path: Option<String>,
-    pub traits: bool,
-    pub types: bool,
+    /// Name of the module into which the generated code should be placed
     pub module_name: Option<String>,
 }
 

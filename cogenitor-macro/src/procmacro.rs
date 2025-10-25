@@ -66,18 +66,6 @@ impl Parse for MacroConfig {
                         "'path' expects a string literal as argument",
                     ))?);
                 }
-                "traits" => {
-                    config.traits = name_value.value.expr_into().ok_or(syn::Error::new(
-                        name_value.span(),
-                        "'traits' expects a bool as argument",
-                    ))?;
-                }
-                "types" => {
-                    config.types = name_value.value.expr_into().ok_or(syn::Error::new(
-                        name_value.span(),
-                        "'types' expects a bool as argument",
-                    ))?;
-                }
                 "module_name" => {
                     config.module_name =
                         Some(name_value.value.clone().expr_into().ok_or(syn::Error::new(
