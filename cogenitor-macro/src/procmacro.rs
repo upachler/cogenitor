@@ -125,12 +125,11 @@ pub fn test_parse_config() {
         config
     );
 
-    let macro_args = quote::quote!(path = "/path/to/openapi.yaml", traits = true);
+    let macro_args = quote::quote!(path = "/path/to/openapi.yaml");
     let config = parse_config(macro_args).unwrap();
     assert_eq!(
         ApiConfig {
             path: Some("/path/to/openapi.yaml".to_string()),
-            traits: true,
             ..Default::default()
         },
         config
