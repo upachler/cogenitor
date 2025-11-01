@@ -108,7 +108,7 @@ pub(crate) fn path_method_to_rust_fn_name(
 }
 
 /// converts paths and methods like 'GET /foo/bar' into type names such as
-///
+/// FooBarGet
 pub(crate) fn path_method_to_rust_type_name(method: http::Method, path: &str) -> String {
     let (l, r) = method.as_str().split_at(1);
     let method_str = l.to_uppercase() + &r.to_lowercase();
@@ -116,7 +116,7 @@ pub(crate) fn path_method_to_rust_type_name(method: http::Method, path: &str) ->
     let path_rump: String = path
         .strip_prefix("/")
         .unwrap_or(path)
-        .split("/")
+        .split(|c: char| !c.is_alphanumeric())
         .map(|s| {
             s.chars()
                 .map(|c| {
@@ -404,5 +404,17 @@ mod tests {
         assert_eq!(status_code_to_name(418), "ImATeapot418");
         assert_eq!(status_code_to_name(999), "Status999");
         assert_eq!(status_code_to_name(123), "Status123");
+    }
+
+    #[test]
+    fn test_path_method_to_rust_type_name() {
+        assert_eq!(
+            path_method_to_rust_type_name(http::Method::GET, "/foo/bar"),
+            "FooBarGet"
+        );
+        assert_eq!(
+            path_method_to_rust_type_name(http::Method::GET, "/foo/bar/{barId}"),
+            "FooBarBarIdGet"
+        );
     }
 }
