@@ -49,7 +49,7 @@ impl ApiConfig {
     }
 }
 
-pub fn generate_mod(config: ApiConfig) -> anyhow::Result<TokenStream> {
+pub fn generate_mod(config: &ApiConfig) -> anyhow::Result<TokenStream> {
     let module_name = config
         .module_name
         .as_ref()
@@ -89,7 +89,7 @@ pub fn generate_token_stream(config: &ApiConfig) -> anyhow::Result<TokenStream> 
 }
 
 pub fn generate_file(config: &ApiConfig, output_path: &std::path::Path) -> anyhow::Result<()> {
-    let ts = generate_token_stream(config)?;
+    let ts = generate_mod(config)?;
     let formatter = rust_format::RustFmt::default();
     let code_string = formatter.format_tokens(ts)?;
 
@@ -149,7 +149,7 @@ fn generate_code<S: Spec>(spec: &S) -> anyhow::Result<TokenStream> {
 
     let ts = codewriter::write_to_token_stream(&codemodel, "crate")?;
 
-    println!("token stream: \n{}", fmt_code(ts.clone()).unwrap());
+    log::trace!("token stream: \n{}", fmt_code(ts.clone()).unwrap());
     Ok(ts)
 }
 
@@ -193,7 +193,7 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
     // we now construct all types properly. When inserting them into
     // the module, stubs are replaced by proper types.
     for (name, ro_schema) in spec.schemata_iter() {
-        println!("creating type for schema '{name}");
+        log::debug!("creating type for schema '{name}");
         match &ro_schema {
             RefOr::Reference(_) => {
                 let alias_name = translate::schema_to_rust_typename(&name);
@@ -221,7 +221,7 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
     let mut client_impl = ImplementationBuilder::new_inherent(client_struct);
     for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
-            println!("creating method for {method} {path}");
+            log::debug!("creating method for {method} {path}");
             client_impl =
                 parse_path_into_impl_fn(ctx, client_impl, &path, &path_item, method, &path_op)?;
         }

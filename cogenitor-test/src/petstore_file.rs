@@ -1,4 +1,8 @@
-mod petstore {
+include!(concat!(env!("OUT_DIR"), "/petstore.rs"));
 
-    include!(concat!(env!("OUT_DIR"), "/petstore.rs"));
+#[test]
+pub fn test_pet_present() {
+    use generated_api::Pet;
+
+    // this test does not fail; if it compiles it means that the Pet type is available
 }

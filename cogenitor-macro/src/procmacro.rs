@@ -88,7 +88,7 @@ impl Parse for MacroConfig {
 
 // Main macro implementation
 pub(super) fn generate_macro_code(config: ApiConfig) -> TokenStream {
-    match cogenitor_core::generate_mod(config) {
+    match cogenitor_core::generate_mod(&config) {
         Ok(ts) => ts,
         Err(e) => match e.downcast_ref::<syn::Error>() {
             Some(e) => e.to_compile_error(),
