@@ -1,4 +1,4 @@
-mod client_util;
+//mod client_adapter;
 
 /// model code for a REST client.
 /// This is for experimentation, so actual client code can be prototyped here and then

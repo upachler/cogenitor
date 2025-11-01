@@ -10,5 +10,5 @@ http.workspace = true
 serde = "1.0.219"
 serde_json = "1.0.140"
 
-[build.dependencies]
+[build-dependencies]
 cogenitor = { path = "../cogenitor" }

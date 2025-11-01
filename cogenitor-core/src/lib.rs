@@ -2,9 +2,11 @@ use anyhow::anyhow;
 use codewriter::fmt_code;
 use proc_macro2::TokenStream;
 use quote::quote;
+use rust_format::Formatter;
 use std::{
     collections::HashMap,
-    io::{BufReader, Cursor, Read, Seek},
+    fs::File,
+    io::{BufReader, Cursor, Read, Seek, Write},
     path::Path,
 };
 use syn::Ident;
@@ -50,22 +52,24 @@ impl ApiConfig {
 pub fn generate_mod(config: ApiConfig) -> anyhow::Result<TokenStream> {
     let module_name = config
         .module_name
+        .as_ref()
+        .map(|s| s.clone())
         .unwrap_or_else(|| "generated_api".to_string());
     let module_ident = Ident::new(&module_name, proc_macro2::Span::call_site());
 
-    let path = config
-        .path
-        .ok_or(anyhow!("no path to OpenAPI file specified"))?;
-    let path = std::path::Path::new(&path);
-    let types = generate_from_path(path)?;
+    let ts = generate_token_stream(&config)?;
 
     let ts = quote! {
         pub mod #module_ident {
             #![allow(unused_imports)]
+            #![allow(dead_code)]
+            #![allow(unused_variables)]
+            #![allow(non_snake_case)]
+            #![allow(non_camel_case_types)]
 
             use std::path::Path;
 
-            #types
+            #ts
         }
     }
     .into();
@@ -73,10 +77,25 @@ pub fn generate_mod(config: ApiConfig) -> anyhow::Result<TokenStream> {
     Ok(ts)
 }
 
-pub fn generate_from_path(path: &Path) -> anyhow::Result<TokenStream> {
+pub fn generate_token_stream(config: &ApiConfig) -> anyhow::Result<TokenStream> {
+    let path = config
+        .path
+        .as_ref()
+        .ok_or(anyhow!("no path to OpenAPI file specified"))?;
+    let path = std::path::Path::new(&path);
     let mut file = std::fs::File::open(path)?;
 
     generate_from_reader(&mut file)
+}
+
+pub fn generate_file(config: &ApiConfig, output_path: &std::path::Path) -> anyhow::Result<()> {
+    let ts = generate_token_stream(config)?;
+    let formatter = rust_format::RustFmt::default();
+    let code_string = formatter.format_tokens(ts)?;
+
+    let mut file = File::create(output_path)?;
+    file.write(code_string.as_bytes())?;
+    Ok(())
 }
 
 #[allow(unused)]
