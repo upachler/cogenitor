@@ -1,18 +1,19 @@
 use std::{
-    borrow::Cow, cell::RefCell, collections::HashMap, error::Error, fmt::Display, ops::Deref,
-    rc::Rc, str::FromStr,
+    borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, ops::Deref, rc::Rc,
+    str::FromStr,
 };
 
 use fqtn::FQTN;
 use lazy_static::lazy_static;
 use proc_macro2::TokenStream;
 
-use crate::codemodel::{implementation::Implementation, simplepath::SimplePath};
+use crate::codemodel::{implementation::Implementation, simplepath::SimplePath, trait_::Trait};
 
 pub mod fqtn;
 pub mod function;
 pub mod implementation;
 pub mod simplepath;
+pub mod trait_;
 
 pub trait Scope {
     fn find_type(&self, name: &str) -> Option<TypeRef>;
@@ -189,16 +190,6 @@ pub struct FieldListBuilder {
     fields: Vec<Field>,
 }
 
-/// Builder for constructing attribute lists with duplicate attribute name checking.
-///
-/// This is a shared utility used internally by both `StructBuilder` and
-/// `EnumBuilder` to provide consistent attribute building behavior
-/// and eliminate code duplication.
-#[derive(Debug)]
-pub struct AttrListBuilder {
-    attrs: Vec<Attr>,
-}
-
 impl FieldListBuilder {
     fn new() -> Self {
         FieldListBuilder { fields: Vec::new() }
@@ -237,7 +228,9 @@ impl FieldListBuilder {
     }
 }
 
-enum AttrListBuilderError {
+#[derive(thiserror::Error, Debug)]
+pub enum AttrListBuilderError {
+    #[error("AttrPathInvalid")]
     AttrPathInvalid,
 }
 
@@ -257,11 +250,19 @@ impl From<AttrListBuilderError> for EnumBuilderError {
     }
 }
 
-impl AttrListBuilder {
-    fn new() -> Self {
-        AttrListBuilder { attrs: Vec::new() }
-    }
+pub trait PushAttr {
+    fn push_attr(&mut self, attr: Attr);
+}
 
+/// Builder for constructing attribute lists with duplicate attribute name checking.
+///
+/// This is a shared utility used internally by both `StructBuilder` and
+/// `EnumBuilder` to provide consistent attribute building behavior
+/// and eliminate code duplication.
+pub trait AttrListBuilder
+where
+    Self: Sized + PushAttr,
+{
     fn attr(self, item_path: &str) -> Result<Self, AttrListBuilderError> {
         self.attr_with_input(item_path, TokenStream::new())
     }
@@ -271,23 +272,37 @@ impl AttrListBuilder {
         item_path: &str,
         input: TokenStream,
     ) -> Result<Self, AttrListBuilderError> {
-        self.attrs.push(Attr {
+        self.push_attr(Attr {
             path: SimplePath::new(item_path).map_err(|_| AttrListBuilderError::AttrPathInvalid)?,
             input,
         });
         Ok(self)
     }
+}
 
-    pub fn build(self) -> Vec<Attr> {
-        self.attrs
+impl<T> AttrListBuilder for T where T: PushAttr {}
+
+trait PushFunction: Sized {
+    fn push_function(&mut self, function: function::Function);
+}
+
+pub trait FunctionListBuilder
+where
+    Self: PushFunction,
+{
+    fn function(mut self, function: function::Function) -> Self {
+        self.push_function(function);
+        self
     }
 }
+
+impl<T> FunctionListBuilder for T where T: PushFunction {}
 
 #[derive(Debug)]
 pub struct StructBuilder {
     name: String,
     field_builder: FieldListBuilder,
-    attr_builder: AttrListBuilder,
+    attribute_list: Vec<Attr>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -363,7 +378,7 @@ impl NamedItem for Enum {
 pub struct EnumBuilder {
     name: String,
     variants: Vec<EnumVariant>,
-    attr_builder: AttrListBuilder,
+    attribute_list: Vec<Attr>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -381,7 +396,7 @@ impl StructBuilder {
         StructBuilder {
             name: name.to_string(),
             field_builder: FieldListBuilder::new(),
-            attr_builder: AttrListBuilder::new(),
+            attribute_list: Vec::new(),
         }
     }
 
@@ -399,26 +414,19 @@ impl StructBuilder {
         self.field_builder = self.field_builder.field_with_input(name, input)?;
         Ok(self)
     }
-    pub fn attr(mut self, name: &str) -> Result<Self, StructBuilderError> {
-        self.attr_builder = self.attr_builder.attr(name)?;
-        Ok(self)
-    }
-
-    pub fn attr_with_input(
-        mut self,
-        name: &str,
-        input: TokenStream,
-    ) -> Result<Self, StructBuilderError> {
-        self.attr_builder = self.attr_builder.attr_with_input(name, input)?;
-        Ok(self)
-    }
 
     pub fn build(self) -> Result<Struct, StructBuilderError> {
         Ok(Struct {
             name: self.name,
-            attribute_list: self.attr_builder.build(),
+            attribute_list: self.attribute_list,
             field_list: self.field_builder.build(),
         })
+    }
+}
+
+impl PushAttr for StructBuilder {
+    fn push_attr(&mut self, attr: Attr) {
+        self.attribute_list.push(attr);
     }
 }
 
@@ -427,7 +435,7 @@ impl EnumBuilder {
         EnumBuilder {
             name: name.to_string(),
             variants: Vec::new(),
-            attr_builder: AttrListBuilder::new(),
+            attribute_list: Vec::new(),
         }
     }
 
@@ -506,26 +514,18 @@ impl EnumBuilder {
         Ok(self)
     }
 
-    pub fn attr(mut self, name: &str) -> Result<Self, EnumBuilderError> {
-        self.attr_builder = self.attr_builder.attr(name)?;
-        Ok(self)
-    }
-
-    pub fn attr_with_input(
-        mut self,
-        name: &str,
-        input: TokenStream,
-    ) -> Result<Self, EnumBuilderError> {
-        self.attr_builder = self.attr_builder.attr_with_input(name, input)?;
-        Ok(self)
-    }
-
     pub fn build(self) -> Result<Enum, EnumBuilderError> {
         Ok(Enum {
             name: self.name,
             variant_list: self.variants,
-            attribute_list: self.attr_builder.build(),
+            attribute_list: self.attribute_list,
         })
+    }
+}
+
+impl PushAttr for EnumBuilder {
+    fn push_attr(&mut self, attr: Attr) {
+        self.attribute_list.push(attr)
     }
 }
 
@@ -603,6 +603,7 @@ pub enum TypeRef {
     Enum(Rc<Enum>),
     Builtin(Rc<Builtin>),
     Alias(Rc<Alias>),
+    Trait(Rc<trait_::Trait>),
     GenericInstance {
         generic_type: Box<TypeRef>,
         type_parameter: Vec<TypeRef>,
@@ -630,6 +631,7 @@ impl PartialEq for TypeRef {
             (Enum(lhs), Enum(rhs)) => Rc::ptr_eq(lhs, rhs),
             (Builtin(lhs), Builtin(rhs)) => Rc::ptr_eq(lhs, rhs),
             (Alias(lhs), Alias(rhs)) => Rc::ptr_eq(lhs, rhs),
+            (Trait(lhs), Trait(rhs)) => Rc::ptr_eq(lhs, rhs),
             (
                 GenericInstance {
                     generic_type: lhs_generic_type,
@@ -673,6 +675,7 @@ impl NamedItem for TypeRef {
             TypeRef::Enum(e) => e.name(),
             TypeRef::Builtin(b) => b.name(),
             TypeRef::Alias(r) => r.name(),
+            TypeRef::Trait(t) => t.name(),
             TypeRef::GenericInstance {
                 generic_type,
                 type_parameter,
@@ -711,6 +714,12 @@ impl From<Struct> for TypeRef {
 impl From<Enum> for TypeRef {
     fn from(value: Enum) -> Self {
         Self::Enum(Rc::new(value))
+    }
+}
+
+impl From<trait_::Trait> for TypeRef {
+    fn from(value: trait_::Trait) -> Self {
+        Self::Trait(Rc::new(value))
     }
 }
 
@@ -789,7 +798,7 @@ impl Display for CodeError {
 }
 
 impl std::error::Error for CodeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         None
     }
 
@@ -797,7 +806,7 @@ impl std::error::Error for CodeError {
         "description() is deprecated; use Display"
     }
 
-    fn cause(&self) -> Option<&dyn Error> {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
         None
     }
 }
@@ -925,10 +934,10 @@ impl Module {
         self.implementations.iter()
     }
 
-    pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
-        let struct_ref = TypeRef::from(s);
+    fn insert_type_ref(&mut self, t: impl Into<TypeRef>) -> Result<TypeRef, CodeError> {
+        let type_ref = t.into();
         if let Some(TypeRef::Indirection(i)) =
-            self.type_namespace.find_item(struct_ref.name().as_ref())
+            self.type_namespace.find_item(type_ref.name().as_ref())
         {
             // if the name collides with a stub, we simply replace that stub,
             // otherwise it's a proper name collision
@@ -937,38 +946,27 @@ impl Module {
                 _ => false,
             };
             if is_stub {
-                let replacement = Indirection::Resolved(struct_ref.clone());
+                let replacement = Indirection::Resolved(type_ref.clone());
                 i.replace(replacement);
             } else {
                 return Err(CodeError::ItemAlreadyPresent);
             }
         } else {
-            self.type_namespace.insert_item(struct_ref.clone())?;
+            self.type_namespace.insert_item(type_ref.clone())?;
         }
-        Ok(struct_ref)
+        Ok(type_ref)
+    }
+
+    pub fn insert_struct(&mut self, s: Struct) -> Result<TypeRef, CodeError> {
+        self.insert_type_ref(s)
     }
 
     pub fn insert_enum(&mut self, e: Enum) -> Result<TypeRef, CodeError> {
-        let enum_ref = TypeRef::from(e);
-        if let Some(TypeRef::Indirection(i)) =
-            self.type_namespace.find_item(enum_ref.name().as_ref())
-        {
-            // if the name collides with a stub, we simply replace that stub,
-            // otherwise it's a proper name collision
-            let is_stub = match i.borrow().deref() {
-                Indirection::Stub(_) => true,
-                _ => false,
-            };
-            if is_stub {
-                let replacement = Indirection::Resolved(enum_ref.clone());
-                i.replace(replacement);
-            } else {
-                return Err(CodeError::ItemAlreadyPresent);
-            }
-        } else {
-            self.type_namespace.insert_item(enum_ref.clone())?;
-        }
-        Ok(enum_ref)
+        self.insert_type_ref(e)
+    }
+
+    pub fn insert_trait(&mut self, t: Trait) -> Result<TypeRef, CodeError> {
+        self.insert_type_ref(t)
     }
 
     pub fn insert_type_stub(&mut self, name: &str) -> Result<TypeRef, CodeError> {

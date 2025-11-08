@@ -1,4 +1,4 @@
-use crate::codemodel::{TypeRef, function::Function};
+use crate::codemodel::{PushFunction, TypeRef, function::Function};
 
 #[derive(Debug)]
 pub enum Implementation {
@@ -21,15 +21,16 @@ impl ImplementationBuilder {
         }
     }
 
-    pub fn function(mut self, function: Function) -> Self {
-        self.associated_functions.push(function);
-        self
-    }
-
     pub fn build(self) -> Implementation {
         Implementation::InherentImpl {
             implementing_type: self.type_,
             associated_functions: self.associated_functions,
         }
+    }
+}
+
+impl PushFunction for ImplementationBuilder {
+    fn push_function(&mut self, function: Function) {
+        self.associated_functions.push(function)
     }
 }

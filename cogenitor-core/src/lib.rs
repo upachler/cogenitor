@@ -7,16 +7,18 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, Cursor, Read, Seek, Write},
-    path::Path,
 };
 use syn::Ident;
 
-use codemodel::{Codemodel, Module, StructBuilder, TypeRef};
+use codemodel::{AttrListBuilder, Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
 
 use crate::{
     adapters::oas30::OAS30Spec,
-    codemodel::{EnumBuilder, function::FunctionBuilder, implementation::ImplementationBuilder},
+    codemodel::{
+        EnumBuilder, FunctionListBuilder, function::FunctionBuilder,
+        implementation::ImplementationBuilder,
+    },
     types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
 };
 
@@ -335,7 +337,7 @@ fn parse_schema<S: Spec>(
 
 fn parse_path_into_impl_fn<S: Spec>(
     ctx: &mut Context<S>,
-    impl_builder: ImplementationBuilder,
+    mut impl_builder: ImplementationBuilder,
     path_name: &str,
     path_item: &S::PathItem,
     method: http::Method,

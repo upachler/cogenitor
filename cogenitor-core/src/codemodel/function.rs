@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use proc_macro2::TokenStream;
+
 use crate::codemodel::{NamedItem, TypeRef};
 
 #[derive(Debug)]
@@ -7,6 +9,7 @@ pub struct Function {
     name: String,
     function_params: Vec<FunctionParam>,
     return_type: TypeRef,
+    body: Option<TokenStream>,
 }
 
 impl Function {
@@ -35,6 +38,7 @@ pub struct FunctionBuilder {
     name: String,
     function_params: Vec<FunctionParam>,
     return_type: TypeRef,
+    body: Option<TokenStream>,
 }
 
 impl FunctionBuilder {
@@ -43,6 +47,7 @@ impl FunctionBuilder {
             name,
             function_params: Default::default(),
             return_type,
+            body: None,
         }
     }
 
@@ -56,6 +61,7 @@ impl FunctionBuilder {
             name: self.name,
             function_params: self.function_params,
             return_type: self.return_type,
+            body: self.body,
         }
     }
 

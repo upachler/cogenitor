@@ -7,8 +7,8 @@ use rust_format::Formatter;
 use thiserror::Error;
 
 use crate::codemodel::{
-    Attr, Codemodel, EnumVariantData, Indirection, NamedItem, TypeRef, TypeRefOrTokenStream,
-    function::Function, implementation::Implementation,
+    Attr, AttrListBuilder, Codemodel, EnumVariantData, FunctionListBuilder, Indirection, NamedItem,
+    TypeRef, TypeRefOrTokenStream, function::Function, implementation::Implementation,
 };
 
 // useful read on working with proc_macro2, quote and syn:
@@ -121,6 +121,22 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                 }
             )
         }
+        TypeRef::Trait(t) => {
+            let trait_name = format_ident!("{}", t.name());
+            let mut function_tokens = Vec::new();
+
+            for func in t.function_iter() {
+                function_tokens.push(write_trait_function(func)?);
+            }
+
+            let attrs = tokenize_attrs(t.attr_iter());
+            quote!(
+                #attrs
+                pub trait #trait_name {
+                    #(#function_tokens)*
+                }
+            )
+        }
         TypeRef::Alias(alias) => {
             let alias_name = Ident::new(&alias.name(), Span::call_site());
             let target_name = syn_type_name_of(alias.target())?;
@@ -173,6 +189,18 @@ fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStre
 }
 
 fn write_function(func: &Function) -> anyhow::Result<TokenStream> {
+    write_function_impl(func, true, Some(quote!(todo!())))
+}
+
+fn write_trait_function(func: &Function) -> anyhow::Result<TokenStream> {
+    write_function_impl(func, false, None)
+}
+
+fn write_function_impl(
+    func: &Function,
+    is_pub: bool,
+    body: Option<TokenStream>,
+) -> anyhow::Result<TokenStream> {
     let func_name = format_ident!("{}", func.name());
     let return_type = syn_type_name_of(func.return_type())?;
 
@@ -183,10 +211,11 @@ fn write_function(func: &Function) -> anyhow::Result<TokenStream> {
         params.push(quote!(#param_name: #param_type));
     }
 
+    let access = if is_pub { Some(quote!(pub)) } else { None };
+
+    let body = body.map(|body| quote!({ #body })).unwrap_or(quote!(;));
     Ok(quote! {
-        pub fn #func_name(#(#params),*) -> #return_type {
-            todo!()
-        }
+        #access fn #func_name(#(#params),*) -> #return_type #body
     })
 }
 
@@ -423,6 +452,58 @@ fn test_write_implementation() -> anyhow::Result<()> {
             pub fn get_author(users: Vec) -> User {
                 todo!()
             }
+        }
+    );
+    assert_tokenstreams_eq!(&ts, &ts_reference);
+    Ok(())
+}
+
+#[test]
+fn test_write_trait() -> anyhow::Result<()> {
+    use crate::codemodel::{Module, function::FunctionBuilder, trait_::TraitBuilder};
+    use assert_tokenstreams_eq::assert_tokenstreams_eq;
+
+    let mut cm = Codemodel::new();
+    let mut m = Module::new("crate");
+
+    // Create trait functions
+    let get_name_fn = FunctionBuilder::new("get_name".to_string(), cm.type_string()).build();
+    let set_name_fn = FunctionBuilder::new("set_name".to_string(), cm.type_unit())
+        .param("name".to_string(), cm.type_string())
+        .build();
+    let get_id_fn = FunctionBuilder::new("get_id".to_string(), cm.type_u32()).build();
+
+    // Create a trait with associated functions
+    let identifiable_trait = TraitBuilder::new("Identifiable")
+        .attr_with_input("derive", quote!((Debug)))?
+        .function(get_name_fn)
+        .function(set_name_fn)
+        .function(get_id_fn)
+        .build()?;
+
+    m.insert_trait(identifiable_trait)?;
+
+    // Create a simpler trait without attributes
+    let simple_trait = TraitBuilder::new("Simple")
+        .function(FunctionBuilder::new("process".to_string(), cm.type_bool()).build())
+        .build()?;
+
+    m.insert_trait(simple_trait)?;
+
+    cm.insert_crate(m)?;
+
+    let ts = write_to_token_stream(&cm, "crate")?;
+    println!("{ts}");
+
+    let ts_reference = quote!(
+        #[derive(Debug)]
+        pub trait Identifiable {
+            fn get_name() -> String;
+            fn set_name(name: String) -> ();
+            fn get_id() -> u32;
+        }
+        pub trait Simple {
+            fn process() -> bool;
         }
     );
     assert_tokenstreams_eq!(&ts, &ts_reference);
