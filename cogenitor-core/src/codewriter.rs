@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::codemodel::{
     Attr, AttrListBuilder, Codemodel, EnumVariantData, FunctionListBuilder, Indirection, NamedItem,
-    TypeRef, TypeRefOrTokenStream, function::Function, implementation::Implementation,
+    TraitRef, TypeRef, TypeRefOrTokenStream, function::Function, implementation::Implementation,
 };
 
 // useful read on working with proc_macro2, quote and syn:
@@ -27,12 +27,18 @@ pub(crate) fn write_to_token_stream(
         type_decls.push(write_type_decl(t)?);
     }
 
+    let mut trait_decls = Vec::new();
+    for t in mod_.trait_iter() {
+        trait_decls.push(write_trait_decl(t)?);
+    }
+
     let mut impl_decls = Vec::new();
     for impl_block in mod_.implementations_iter() {
         impl_decls.push(write_implementation(impl_block)?);
     }
 
     let mut ts = TokenStream::new();
+    ts.extend(trait_decls);
     ts.extend(type_decls);
     ts.extend(impl_decls);
     Ok(ts)
@@ -121,22 +127,6 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
                 }
             )
         }
-        TypeRef::Trait(t) => {
-            let trait_name = format_ident!("{}", t.name());
-            let mut function_tokens = Vec::new();
-
-            for func in t.function_iter() {
-                function_tokens.push(write_trait_function(func)?);
-            }
-
-            let attrs = tokenize_attrs(t.attr_iter());
-            quote!(
-                #attrs
-                pub trait #trait_name {
-                    #(#function_tokens)*
-                }
-            )
-        }
         TypeRef::Alias(alias) => {
             let alias_name = Ident::new(&alias.name(), Span::call_site());
             let target_name = syn_type_name_of(alias.target())?;
@@ -148,6 +138,24 @@ fn write_type_decl(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
         },
         _ => return Err(anyhow!("unsupported type declaration {type_ref:?}")),
     };
+    Ok(ts)
+}
+
+fn write_trait_decl(t: &TraitRef) -> anyhow::Result<TokenStream> {
+    let trait_name = format_ident!("{}", t.name());
+    let mut function_tokens = Vec::new();
+
+    for func in t.function_iter() {
+        function_tokens.push(write_trait_function(func)?);
+    }
+
+    let attrs = tokenize_attrs(t.attr_iter());
+    let ts = quote!(
+        #attrs
+        pub trait #trait_name {
+            #(#function_tokens)*
+        }
+    );
     Ok(ts)
 }
 
@@ -167,24 +175,27 @@ fn syn_type_name_of(type_ref: &TypeRef) -> anyhow::Result<TokenStream> {
 }
 
 fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStream> {
-    match impl_block {
-        Implementation::InherentImpl {
-            implementing_type,
-            associated_functions,
-        } => {
-            let type_name = syn_type_name_of(implementing_type)?;
-            let mut function_tokens = Vec::new();
+    let type_name = syn_type_name_of(&impl_block.implementing_type)?;
+    let mut function_tokens = Vec::new();
 
-            for func in associated_functions {
-                function_tokens.push(write_function(func)?);
-            }
+    for func in &impl_block.associated_functions {
+        function_tokens.push(write_function(func)?);
+    }
 
+    match &impl_block.impl_trait {
+        Some(trait_ref) => {
+            let trait_name = trait_ref.name();
             Ok(quote! {
-                impl #type_name {
+                impl #trait_name for #type_name {
                     #(#function_tokens)*
                 }
             })
         }
+        None => Ok(quote! {
+            impl #type_name {
+                #(#function_tokens)*
+            }
+        }),
     }
 }
 

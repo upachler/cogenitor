@@ -7,7 +7,7 @@ use super::function::Function;
 #[derive(Debug)]
 pub struct Trait {
     name: String,
-    associated_functions: Vec<Function>,
+    pub associated_functions: Vec<Function>,
     attribute_list: Vec<Attr>,
 }
 

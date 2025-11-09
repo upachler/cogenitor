@@ -62,7 +62,7 @@ impl Codemodel {
     }
 
     pub fn insert_crate(&mut self, crate_module: Module) -> Result<ModuleRef, CodeError> {
-        self.crate_namespace.insert_item(crate_module.into())
+        self.crate_namespace.insert_item(crate_module)
     }
     pub fn find_type(&self, fqtn: &FQTN) -> Option<TypeRef> {
         let mut module = self.crate_namespace.find_item(fqtn.crate_name())?;
@@ -603,7 +603,6 @@ pub enum TypeRef {
     Enum(Rc<Enum>),
     Builtin(Rc<Builtin>),
     Alias(Rc<Alias>),
-    Trait(Rc<trait_::Trait>),
     GenericInstance {
         generic_type: Box<TypeRef>,
         type_parameter: Vec<TypeRef>,
@@ -631,7 +630,6 @@ impl PartialEq for TypeRef {
             (Enum(lhs), Enum(rhs)) => Rc::ptr_eq(lhs, rhs),
             (Builtin(lhs), Builtin(rhs)) => Rc::ptr_eq(lhs, rhs),
             (Alias(lhs), Alias(rhs)) => Rc::ptr_eq(lhs, rhs),
-            (Trait(lhs), Trait(rhs)) => Rc::ptr_eq(lhs, rhs),
             (
                 GenericInstance {
                     generic_type: lhs_generic_type,
@@ -675,7 +673,6 @@ impl NamedItem for TypeRef {
             TypeRef::Enum(e) => e.name(),
             TypeRef::Builtin(b) => b.name(),
             TypeRef::Alias(r) => r.name(),
-            TypeRef::Trait(t) => t.name(),
             TypeRef::GenericInstance {
                 generic_type,
                 type_parameter,
@@ -717,9 +714,22 @@ impl From<Enum> for TypeRef {
     }
 }
 
-impl From<trait_::Trait> for TypeRef {
-    fn from(value: trait_::Trait) -> Self {
-        Self::Trait(Rc::new(value))
+#[derive(Clone, Debug)]
+pub struct TraitRef {
+    trait_ref: std::rc::Rc<trait_::Trait>,
+}
+
+impl NamedItem for TraitRef {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
+        self.trait_ref.name()
+    }
+}
+
+impl Deref for TraitRef {
+    type Target = Trait;
+
+    fn deref(&self) -> &Self::Target {
+        self.trait_ref.deref()
     }
 }
 
@@ -814,13 +824,15 @@ impl std::error::Error for CodeError {
 /**
 A namespace stores items that each have a unique name
 */
+#[derive(Debug)]
 struct Namespace<T> {
     item_list: Vec<T>,
     item_map: HashMap<String, T>,
 }
 
 impl<T: NamedItem + Clone> Namespace<T> {
-    fn insert_item(&mut self, named_item: T) -> Result<T, CodeError> {
+    fn insert_item(&mut self, named_item: impl Into<T>) -> Result<T, CodeError> {
+        let named_item = named_item.into();
         if self.item_map.contains_key(named_item.name().as_ref()) {
             return Err(CodeError::ItemAlreadyPresent);
         }
@@ -846,19 +858,54 @@ impl<T> Default for Namespace<T> {
     }
 }
 
-pub struct Module {
-    name: String,
-    type_namespace: Namespace<TypeRef>,
-    module_namespace: Namespace<ModuleRef>,
-    implementations: Vec<Implementation>,
+#[derive(Clone, Debug)]
+enum ItemRef {
+    TypeRef(TypeRef),
+    TraitRef(TraitRef),
+    ModuleRef(ModuleRef),
 }
 
+impl From<TypeRef> for ItemRef {
+    fn from(type_ref: TypeRef) -> Self {
+        ItemRef::TypeRef(type_ref)
+    }
+}
+
+impl From<TraitRef> for ItemRef {
+    fn from(trait_ref: TraitRef) -> Self {
+        ItemRef::TraitRef(trait_ref)
+    }
+}
+
+impl From<ModuleRef> for ItemRef {
+    fn from(module_ref: ModuleRef) -> Self {
+        ItemRef::ModuleRef(module_ref)
+    }
+}
+
+impl NamedItem for ItemRef {
+    fn name<'a>(&'a self) -> Cow<'a, str> {
+        match self {
+            ItemRef::TypeRef(type_ref) => type_ref.name(),
+            ItemRef::TraitRef(trait_ref) => trait_ref.name(),
+            ItemRef::ModuleRef(module_ref) => module_ref.name(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Module {
+    name: String,
+    item_namespace: Namespace<ItemRef>,
+    implementations: Vec<Implementation>,
+}
+/*
 impl std::fmt::Debug for Module {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = &self.name;
         f.write_fmt(format_args!("Module {name}"))
     }
-}
+}*/
 
 /**
 Wrapper around Rc<T> for named code model items like modules and crates
@@ -911,18 +958,39 @@ impl Module {
     pub fn new(name: &str) -> Self {
         Module {
             name: name.to_string(),
-            module_namespace: Default::default(),
-            type_namespace: Default::default(),
+            item_namespace: Default::default(),
             implementations: Vec::new(),
         }
     }
 
     pub fn type_iter(&self) -> impl Iterator<Item = &TypeRef> {
-        self.type_namespace.item_list.iter()
+        self.item_namespace
+            .item_list
+            .iter()
+            .filter_map(|i| match i {
+                ItemRef::TypeRef(type_ref) => Some(type_ref),
+                _ => None,
+            })
     }
 
     pub fn mod_iter(&self) -> impl Iterator<Item = &ModuleRef> {
-        self.module_namespace.item_list.iter()
+        self.item_namespace
+            .item_list
+            .iter()
+            .filter_map(|i| match i {
+                ItemRef::ModuleRef(module_ref) => Some(module_ref),
+                _ => None,
+            })
+    }
+
+    pub fn trait_iter(&self) -> impl Iterator<Item = &TraitRef> {
+        self.item_namespace
+            .item_list
+            .iter()
+            .filter_map(|i| match i {
+                ItemRef::TraitRef(trait_ref) => Some(trait_ref),
+                _ => None,
+            })
     }
 
     pub fn insert_implementation(&mut self, i: Implementation) -> Result<(), CodeError> {
@@ -936,23 +1004,26 @@ impl Module {
 
     fn insert_type_ref(&mut self, t: impl Into<TypeRef>) -> Result<TypeRef, CodeError> {
         let type_ref = t.into();
-        if let Some(TypeRef::Indirection(i)) =
-            self.type_namespace.find_item(type_ref.name().as_ref())
-        {
-            // if the name collides with a stub, we simply replace that stub,
-            // otherwise it's a proper name collision
-            let is_stub = match i.borrow().deref() {
-                Indirection::Stub(_) => true,
-                _ => false,
-            };
-            if is_stub {
-                let replacement = Indirection::Resolved(type_ref.clone());
-                i.replace(replacement);
-            } else {
+        match self.item_namespace.find_item(type_ref.name().as_ref()) {
+            Some(ItemRef::TypeRef(TypeRef::Indirection(i))) => {
+                let is_stub = match i.borrow().deref() {
+                    Indirection::Stub(_) => true,
+                    _ => false,
+                };
+                if is_stub {
+                    let replacement = Indirection::Resolved(type_ref.clone());
+                    i.replace(replacement);
+                } else {
+                    return Err(CodeError::ItemAlreadyPresent);
+                }
+            }
+            Some(_item) => {
                 return Err(CodeError::ItemAlreadyPresent);
             }
-        } else {
-            self.type_namespace.insert_item(type_ref.clone())?;
+            _ => {
+                self.item_namespace
+                    .insert_item(ItemRef::TypeRef(type_ref.clone()))?;
+            }
         }
         Ok(type_ref)
     }
@@ -965,28 +1036,33 @@ impl Module {
         self.insert_type_ref(e)
     }
 
-    pub fn insert_trait(&mut self, t: Trait) -> Result<TypeRef, CodeError> {
-        self.insert_type_ref(t)
+    pub fn insert_trait(&mut self, t: Trait) -> Result<TraitRef, CodeError> {
+        let trait_ref: TraitRef = TraitRef {
+            trait_ref: Rc::new(t),
+        };
+        self.item_namespace.insert_item(trait_ref.clone())?;
+        Ok(trait_ref)
     }
 
     pub fn insert_type_stub(&mut self, name: &str) -> Result<TypeRef, CodeError> {
-        self.type_namespace
-            .insert_item(TypeRef::Indirection(Rc::new(RefCell::new(
-                Indirection::Stub(name.to_string()),
-            ))))
+        let type_ref =
+            TypeRef::Indirection(Rc::new(RefCell::new(Indirection::Stub(name.to_string()))));
+        self.item_namespace.insert_item(type_ref.clone())?;
+        Ok(type_ref)
     }
 
     pub fn insert_type_alias(&mut self, name: &str, target: TypeRef) -> Result<TypeRef, CodeError> {
-        self.type_namespace
-            .insert_item(TypeRef::Alias(Rc::new(Alias {
-                name: name.to_string(),
-                target,
-            })))
+        let type_alias = TypeRef::Alias(Rc::new(Alias {
+            name: name.to_string(),
+            target,
+        }));
+        self.item_namespace.insert_item(type_alias.clone())?;
+        Ok(type_alias)
     }
 
     fn insert_module(&mut self, m: Module) -> Result<ModuleRef, CodeError> {
         let m: ModuleRef = m.into();
-        self.module_namespace.insert_item(m.clone())?;
+        self.item_namespace.insert_item(m.clone())?;
         Ok(m)
     }
 }
@@ -999,20 +1075,24 @@ impl NamedItem for Module {
 
 impl Scope for Module {
     fn find_type(&self, name: &str) -> Option<TypeRef> {
-        match self.type_namespace.find_item(name) {
-            Some(target) => match target {
+        match self.item_namespace.find_item(name) {
+            Some(ItemRef::TypeRef(target)) => match target {
                 TypeRef::Indirection(i) => match i.borrow().deref() {
                     Indirection::Stub(_) => None,
                     Indirection::Resolved(inner_target) => Some(inner_target.clone()),
                 },
                 _ => Some(target),
             },
-            None => None,
+            _ => None,
         }
     }
 
     fn find_module(&self, name: &str) -> Option<ModuleRef> {
-        self.module_namespace.find_item(name)
+        if let Some(ItemRef::ModuleRef(module_ref)) = self.item_namespace.find_item(name) {
+            Some(module_ref.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -1030,13 +1110,6 @@ mod tests {
                 type_ref
             } else {
                 panic!("expected TypeRef variant, encountered {self:?}")
-            }
-        }
-        pub(crate) fn unwrap_token_stream(&self) -> &TokenStream {
-            if let TypeRefOrTokenStream::TokenStream(token_stream) = self {
-                token_stream
-            } else {
-                panic!("expected TokenStream variant, encountered {self:?}")
             }
         }
     }
@@ -1368,9 +1441,10 @@ mod tests {
 
         let stored_impl = m.implementations_iter().next().unwrap();
         match stored_impl {
-            Implementation::InherentImpl {
+            Implementation {
                 implementing_type,
                 associated_functions,
+                ..
             } => {
                 assert_eq!(implementing_type.name(), "TestStruct");
                 assert_eq!(associated_functions.len(), 3);

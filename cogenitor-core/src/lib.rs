@@ -16,8 +16,7 @@ use types::{BooleanOrSchema, Schema, Spec};
 use crate::{
     adapters::oas30::OAS30Spec,
     codemodel::{
-        EnumBuilder, FunctionListBuilder, function::FunctionBuilder,
-        implementation::ImplementationBuilder,
+        EnumBuilder, FunctionListBuilder, function::FunctionBuilder, trait_::TraitBuilder,
     },
     types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
 };
@@ -215,20 +214,28 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
 
     log::trace!("types from schemas section constructed: {:?}", ctx.mapping);
 
-    let client_struct = StructBuilder::new("Client")
+    let client_struct = StructBuilder::new("ClientImpl")
         .attr_with_input("derive", quote::quote!((Debug)))?
         .build()?;
-    let client_struct = ctx.m.insert_struct(client_struct)?;
+    //let client_struct = ctx.m.insert_struct(client_struct)?;
 
-    let mut client_impl = ImplementationBuilder::new_inherent(client_struct);
+    let mut client_trait = TraitBuilder::new("Client");
+    //    let mut client_impl = ImplementationBuilder::new_trait(client_struct, client_trait);
     for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
             log::debug!("creating method for {method} {path}");
-            client_impl =
-                parse_path_into_impl_fn(ctx, client_impl, &path, &path_item, method, &path_op)?;
+            client_trait = parse_path_into_impl_fn(
+                ctx,
+                client_trait,
+                &path,
+                &path_item,
+                method.clone(),
+                &path_op,
+            )?;
         }
     }
-    ctx.m.insert_implementation(client_impl.build())?;
+    //    ctx.m.insert_implementation(client_impl.build())?;
+    ctx.m.insert_trait(client_trait.build()?)?;
 
     Ok(())
 }
@@ -335,14 +342,14 @@ fn parse_schema<S: Spec>(
     }
 }
 
-fn parse_path_into_impl_fn<S: Spec>(
+fn parse_path_into_impl_fn<S: Spec, B: FunctionListBuilder>(
     ctx: &mut Context<S>,
-    mut impl_builder: ImplementationBuilder,
+    impl_builder: B,
     path_name: &str,
     path_item: &S::PathItem,
     method: http::Method,
     path_op: &S::Operation,
-) -> anyhow::Result<ImplementationBuilder> {
+) -> anyhow::Result<B> {
     let candidate_name = translate::path_method_to_rust_fn_name(&method, path_name)?;
 
     let fn_name = candidate_name; // FIXME: handle collisions

@@ -2,7 +2,9 @@ use std::{io::Cursor, str::FromStr};
 use test_log::test;
 use types::Components;
 
-use crate::codemodel::{NamedItem, Scope, implementation::Implementation};
+#[cfg(test)]
+use crate::codemodel::function::Function;
+use crate::codemodel::{NamedItem, Scope};
 
 use super::*;
 
@@ -84,16 +86,12 @@ paths:
     assert_eq!(1, spec.paths().count());
     let (cm, _mapping) = super::build_codemodel(&spec)?;
     let crate_ = cm.find_crate("crate").unwrap();
-    assert!(crate_.type_iter().any(|t| t.name() == "Client"));
-    let the_answer_get_fn = match crate_.implementations_iter().next().unwrap() {
-        Implementation::InherentImpl {
-            associated_functions,
-            implementing_type: _,
-        } => associated_functions
-            .iter()
-            .find(|f| f.name() == "nothing_get"),
-    }
-    .unwrap();
+    assert!(
+        crate_.trait_iter().any(|t| t.name() == "Client"),
+        "item not found in crate with content: {crate_:?}"
+    );
+    let trait_ = crate_.trait_iter().next().unwrap();
+    let the_answer_get_fn = unwrap_function("nothing_get", trait_.associated_functions.iter());
 
     assert_eq!(
         1,
@@ -138,16 +136,10 @@ paths:
     assert_eq!(1, spec.paths().count());
     let (cm, _mapping) = super::build_codemodel(&spec)?;
     let crate_ = cm.find_crate("crate").unwrap();
-    assert!(crate_.type_iter().any(|t| t.name() == "Client"));
-    let the_answer_get_fn = match crate_.implementations_iter().next().unwrap() {
-        Implementation::InherentImpl {
-            associated_functions,
-            implementing_type: _,
-        } => associated_functions
-            .iter()
-            .find(|f| f.name() == "pet_findbystatus_get"),
-    }
-    .unwrap();
+    assert!(crate_.trait_iter().any(|t| t.name() == "Client"));
+    let trait_ = crate_.trait_iter().next().unwrap();
+    let the_answer_get_fn =
+        unwrap_function("pet_findbystatus_get", trait_.associated_functions.iter());
 
     assert_eq!(
         2,
@@ -156,4 +148,15 @@ paths:
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+fn unwrap_function<'a, 'b>(
+    name: &'a str,
+    mut functions: impl Iterator<Item = &'b Function>,
+) -> &'b Function {
+    match functions.find(|f| f.name() == name) {
+        Some(function) => function,
+        None => panic!("Implemenation does not match pattern"),
+    }
 }
