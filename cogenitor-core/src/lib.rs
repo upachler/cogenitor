@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use rust_format::Formatter;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, Cursor, Read, Seek, Write},
 };
@@ -317,13 +317,28 @@ fn parse_schema<S: Spec>(
                     )),
                 )
                 .unwrap();
+            let required: HashSet<&str> = schema
+                .required()
+                .unwrap_or_default()
+                .iter()
+                .map(|e| *e)
+                .collect();
             for (name, schema) in schema.properties() {
                 let rust_name = translate::property_to_rust_fieldname(&name);
                 let schema = schema.resolve();
                 let candidate_name =
                     translate::schema_to_rust_typename((struct_name.to_string() + &name).as_str());
-                let type_ref = type_ref_of(ctx, &schema, &candidate_name)?;
-                b = b.field(&rust_name, type_ref)?;
+                let property_type_ref = type_ref_of(ctx, &schema, &candidate_name)?;
+                let actual_type_ref;
+                // if property is required, use the type directly, otherwise wrap it in option
+                if required.contains(name.as_str()) {
+                    actual_type_ref = property_type_ref;
+                } else {
+                    actual_type_ref = ctx
+                        .cm
+                        .type_instance(&ctx.cm.type_option(), &[property_type_ref]);
+                }
+                b = b.field(&rust_name, actual_type_ref)?;
             }
             let s = b.build()?;
             Ok(ctx.m.insert_struct(s)?)

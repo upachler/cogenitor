@@ -14,15 +14,15 @@ mod tests {
     pub fn test_generated_api() {
         // first, try to construct a Pet instance
         let pet = generated_api::Pet {
-            id: 1,
+            id: Some(1),
             name: "Doggy".to_string(),
-            category: generated_api::Category {
-                id: 1000,
-                name: "Dogs".to_string(),
-            },
-            status: "placed".to_string(),
+            category: Some(generated_api::Category {
+                id: Some(1000),
+                name: Some("Dogs".to_string()),
+            }),
+            status: Some("placed".to_string()),
             photoUrls: vec![],
-            tags: vec![],
+            tags: Some(vec![]),
         };
 
         // serialize that instance to a JSON value and compare

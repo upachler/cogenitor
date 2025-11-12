@@ -28,6 +28,7 @@ lazy_static! {
     static ref STRING_TYPE_NAME: FQTN = FQTN::from_str("std::string::String").unwrap();
     static ref VEC_TYPE_NAME: FQTN = FQTN::from_str("std::vec::Vec").unwrap();
     static ref RESULT_TYPE_NAME: FQTN = FQTN::from_str("std::result::Result").unwrap();
+    static ref OPTION_TYPE_NAME: FQTN = FQTN::from_str("std::option::Option").unwrap();
 }
 
 impl Codemodel {
@@ -56,6 +57,11 @@ impl Codemodel {
         let result_struct = StructBuilder::new("Result").build().unwrap();
         result.insert_struct(result_struct)?;
         std.insert_module(result)?;
+
+        let mut option = Module::new("option");
+        let option_struct = StructBuilder::new("Option").build().unwrap();
+        option.insert_struct(option_struct)?;
+        std.insert_module(option)?;
 
         self.insert_crate(std)?;
         Ok(self)
@@ -137,6 +143,10 @@ impl Codemodel {
 
     pub fn type_result(&self) -> TypeRef {
         self.find_type(&RESULT_TYPE_NAME).unwrap()
+    }
+
+    pub fn type_option(&self) -> TypeRef {
+        self.find_type(&OPTION_TYPE_NAME).unwrap()
     }
 
     pub fn type_self(&self) -> TypeRef {

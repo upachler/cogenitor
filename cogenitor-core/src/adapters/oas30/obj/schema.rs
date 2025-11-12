@@ -311,7 +311,12 @@ impl Schema for OAS30Pointer<SchemaSource> {
     }
 
     fn required(&self) -> Option<Vec<&str>> {
-        todo!()
+        match &self.inner().schema_kind {
+            openapiv3::SchemaKind::Type(Type::Object(object_type)) => {
+                Some(object_type.required.iter().map(|e| e.as_ref()).collect())
+            }
+            _ => None,
+        }
     }
 
     fn all_of(&self) -> Option<Vec<impl Schema>> {
