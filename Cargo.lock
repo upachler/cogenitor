@@ -184,6 +184,7 @@ dependencies = [
 name = "cogenitor-test"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cogenitor",
  "cogenitor-core",
  "http",
