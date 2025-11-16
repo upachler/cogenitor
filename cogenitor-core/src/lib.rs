@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use codewriter::fmt_code;
-use proc_macro2::TokenStream;
+use http::Method;
+use proc_macro2::{Span, TokenStream, token_stream};
 use quote::quote;
 use rust_format::Formatter;
 use std::{
@@ -8,7 +9,7 @@ use std::{
     fs::File,
     io::{BufReader, Cursor, Read, Seek, Write},
 };
-use syn::Ident;
+use syn::{Ident, LitStr};
 
 use codemodel::{AttrListBuilder, Codemodel, Module, StructBuilder, TypeRef};
 use types::{BooleanOrSchema, Schema, Spec};
@@ -16,9 +17,15 @@ use types::{BooleanOrSchema, Schema, Spec};
 use crate::{
     adapters::oas30::OAS30Spec,
     codemodel::{
-        EnumBuilder, FunctionListBuilder, function::FunctionBuilder, trait_::TraitBuilder,
+        EnumBuilder, FunctionListBuilder, NamedItem,
+        function::{Function, FunctionBuilder},
+        implementation::ImplementationBuilder,
+        trait_::TraitBuilder,
     },
-    types::{MediaType, Operation, Parameter, PathItem, RefOr, RequestBody, Response, StatusSpec},
+    types::{
+        MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr, RequestBody, Response,
+        StatusSpec,
+    },
 };
 
 pub mod codemodel;
@@ -214,17 +221,11 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
 
     log::trace!("types from schemas section constructed: {:?}", ctx.mapping);
 
-    let client_struct = StructBuilder::new("ClientImpl")
-        .attr_with_input("derive", quote::quote!((Debug)))?
-        .build()?;
-    //let client_struct = ctx.m.insert_struct(client_struct)?;
-
     let mut client_trait = TraitBuilder::new("Client");
-    //    let mut client_impl = ImplementationBuilder::new_trait(client_struct, client_trait);
     for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
             log::debug!("creating method for {method} {path}");
-            client_trait = parse_path_into_impl_fn(
+            client_trait = parse_path_into_trait_fn(
                 ctx,
                 client_trait,
                 &path,
@@ -234,8 +235,23 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
             )?;
         }
     }
-    //    ctx.m.insert_implementation(client_impl.build())?;
-    ctx.m.insert_trait(client_trait.build()?)?;
+
+    let client_trait = ctx.m.insert_trait(client_trait.build()?)?;
+
+    let client_struct = StructBuilder::new("ClientImpl")
+        .attr_with_input("derive", quote::quote!((Debug)))?
+        .build()?;
+    let client_struct = ctx.m.insert_struct(client_struct)?;
+
+    let mut client_impl = ImplementationBuilder::new_trait(client_trait, client_struct);
+
+    // TODO: fill 'operations'
+    let operations = vec![];
+    for (path, method, fn_context) in operations {
+        client_impl = make_impl_fn(ctx, client_impl, path, method, fn_context)?;
+    }
+
+    ctx.m.insert_implementation(client_impl.build())?;
 
     Ok(())
 }
@@ -357,7 +373,260 @@ fn parse_schema<S: Spec>(
     }
 }
 
-fn parse_path_into_impl_fn<S: Spec, B: FunctionListBuilder>(
+enum MediaTypeMapping {
+    SingleMediaType {
+        media_type: String,
+        content_type_ref: TypeRef,
+    },
+    MultipleMediaTypes {
+        content_enum_type_ref: TypeRef,
+        media_type_to_variant: Vec<(String, String)>,
+    },
+}
+
+enum ResponseBodyMapping {
+    NoBody,
+    SingleResponse(StatusSpec, MediaTypeMapping),
+    MultipleResponses(Vec<(StatusSpec, MediaTypeMapping)>),
+}
+
+struct OperationParameterMapping {
+    oas_name: String,
+    rust_name: String,
+    type_ref: TypeRef,
+    loc: crate::types::ParameterLocation,
+}
+
+struct OperationMethodContext {
+    method_name: String,
+    parameters: Vec<OperationParameterMapping>,
+    body_param: Option<(String, MediaTypeMapping)>,
+    return_type: TypeRef,
+    success_return_mapping: ResponseBodyMapping,
+    error_return_mapping: ResponseBodyMapping,
+}
+
+fn make_operation_method<S: Spec>(
+    ctx: &Context<S>,
+    omc: &OperationMethodContext,
+) -> FunctionBuilder {
+    // create function builder with self parameter to make it a method
+    let mut function = FunctionBuilder::new(omc.method_name.clone(), omc.return_type.clone())
+        .param("self".to_string(), ctx.cm.type_ref_self());
+
+    // add method parameters for path, query header and cookie OAS params
+    for opm in &omc.parameters {
+        function = function.param(opm.rust_name.clone(), opm.type_ref.clone())
+    }
+
+    // add parameter for request body, if present
+    if let Some((body_param_name, media_type_mapping)) = &omc.body_param {
+        let param_type_ref = match media_type_mapping {
+            MediaTypeMapping::SingleMediaType {
+                media_type: _,
+                content_type_ref,
+            } => content_type_ref,
+            MediaTypeMapping::MultipleMediaTypes {
+                content_enum_type_ref,
+                media_type_to_variant: _,
+            } => content_enum_type_ref,
+        };
+        function = function.param(body_param_name.clone(), param_type_ref.clone());
+    }
+
+    // the result is the preconfigured function builder (yet without a body)
+    function
+}
+
+/// produces a statement 'let path: &str = ...' that holds a path initialized
+/// via the given `path_template` and the `param_values`. `path_template` is
+/// an OAS-style path template like '/foo/bar' or '/foo/{bar}'. Note that the
+/// first form does not have parameters, so the result would be 'let path: &str = "/foo/bar"'.
+/// The latter form has a path parameter 'bar', which should produce code
+/// that creates that path by appending strings at runtime.
+fn make_path_ts(path_template: &str, param_values: Vec<(&str, &str)>) -> TokenStream {
+    // create token stream of statements that assemble path construction code.
+    // the token stream may be empty if there are not template parameters in
+    // the path, and/or if there are no parameters in the parameter_values
+    // list that match any of the template parameters
+    let pattern = regex::Regex::new(r"\{([^}]*)\}").unwrap();
+    let mut last_end = 0usize;
+    let last_end = &mut last_end;
+    let path_assembly_statements: TokenStream = pattern
+        .captures_iter(path_template)
+        .filter_map(|capture| {
+            let token_stream_opt = capture.get(1).and_then(|param_match| {
+                param_values
+                    .iter()
+                    .filter_map(|(param_name, variable_name)| {
+                        if param_name.eq(&param_match.as_str()) {
+                            Some(variable_name)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|variable_name| {
+                        let variable_ident = Ident::new(variable_name, Span::call_site());
+                        let match_start = capture.get_match().start();
+                        let prefix: &[u8] = &(path_template.as_bytes()[*last_end..match_start]);
+                        let prefix = syn::LitStr::new(
+                            String::from_utf8_lossy(prefix).as_ref(),
+                            Span::call_site(),
+                        );
+                        *last_end = capture.get_match().end();
+                        param_match.start();
+                        quote!(
+                            sb.append(#prefix);
+                            sb.append(#variable_ident);
+                        )
+                    })
+                    .next()
+            });
+
+            token_stream_opt
+        })
+        .collect();
+
+    // short cut literal path construction if there are no path construction statements. This avoids copying the
+    // path template in generated code
+    if path_assembly_statements.is_empty() {
+        let path_template = LitStr::new(path_template, Span::call_site());
+        return quote!(let path: &str = #path_template;);
+    } else {
+        let (_, suffix) = path_template.as_bytes().split_at(*last_end);
+        let suffix = LitStr::new(String::from_utf8_lossy(suffix).as_ref(), Span::call_site());
+
+        quote!(
+            let sb = String::new();
+            #path_assembly_statements
+            sb.append(#suffix);
+            let path: &str = sb.as_str();
+        )
+    }
+}
+
+#[test]
+pub fn test_make_path_ts() {
+    // path without parameters
+    let ts = make_path_ts("/foo/bar", vec![]);
+    assert_eq!(
+        ts.to_string(),
+        quote!(let path: &str = "/foo/bar";).to_string()
+    );
+
+    // path with multiple parameters
+    let ts = make_path_ts(
+        "/foo/{bar}/{id}/lub",
+        vec![("bar", "bar_value"), ("id", "id_value")],
+    );
+    assert_eq!(
+        ts.to_string(),
+        quote!(
+            let sb = String::new();
+            sb.append("/foo/");
+            sb.append(bar_value);
+            sb.append("/");
+            sb.append(id_value);
+            sb.append ("/lub");
+            let path: &str = sb.as_str();
+        )
+        .to_string()
+    );
+
+    // path with multiple parameters, but where none of the
+    // values matches the path
+    let ts = make_path_ts("/foo/{bar}/{id}/lub", vec![("blibb", "blibb_value")]);
+    assert_eq!(
+        ts.to_string(),
+        quote!(let path: &str = "/foo/{bar}/{id}/lub";).to_string()
+    )
+}
+
+fn make_impl_fn<S: Spec>(
+    ctx: &mut Context<S>,
+    client_impl: ImplementationBuilder,
+    path_name: &str,
+    method: http::Method,
+    omc: &OperationMethodContext,
+) -> Result<ImplementationBuilder, anyhow::Error> {
+    let mut function = make_operation_method(ctx, omc);
+
+    function.body(quote!(todo!("operation not yet implemented!")));
+
+    let method_ts = match method {
+        Method::CONNECT => quote!(reqwest::Method::CONNECT),
+        Method::DELETE => quote!(reqwest::Method::DELETE),
+        Method::GET => quote!(reqwest::Method::GET),
+        Method::HEAD => quote!(reqwest::Method::HEAD),
+        Method::OPTIONS => quote!(reqwest::Method::OPTIONS),
+        Method::PATCH => quote!(reqwest::Method::PATCH),
+        Method::POST => quote!(reqwest::Method::POST),
+        Method::PUT => quote!(reqwest::Method::PUT),
+        Method::TRACE => quote!(reqwest::Method::TRACE),
+
+        method => return Err(anyhow::anyhow!("the method {method} is not supported")),
+    };
+
+    let parameter_assignments: TokenStream = omc
+        .parameters
+        .iter()
+        .filter_map(
+            |OperationParameterMapping {
+                 oas_name,
+                 rust_name,
+                 type_ref,
+                 loc,
+             }| {
+                let param = syn::Ident::new(rust_name, Span::call_site());
+                match loc {
+                    types::ParameterLocation::Query => Some(quote!(rb.query(#oas_name, #param);)),
+                    types::ParameterLocation::Header => Some(quote!(rb.header(#oas_name, #param);)),
+                    types::ParameterLocation::Path => None, // paths are handled below
+                    types::ParameterLocation::Cookie => todo!(),
+                }
+            },
+        )
+        .collect();
+
+    // extract list path parameters, where each is a tuple of
+    // the OAS path template parameter name and the corresponding rust method parameter name
+    let path_param_mapping = omc
+        .parameters
+        .iter()
+        .filter_map(|opm| {
+            if let OperationParameterMapping {
+                oas_name,
+                rust_name,
+                loc: ParameterLocation::Path,
+                ..
+            } = opm
+            {
+                Some((oas_name.as_str(), rust_name.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let path_construction_statements = make_path_ts(path_name, path_param_mapping);
+
+    let body = quote!(
+        // set up request builder
+        #path_construction_statements
+        let url = self.base_url().join(path);
+        let client = reqwest::blocking::Client::new();
+        let rb = client.request(#method_ts, url);
+        #parameter_assignments
+        let request = rb.build();
+        client.execute(request);
+    );
+
+    function.body(body);
+
+    Ok(client_impl.function(function.build()))
+}
+
+fn parse_path_into_trait_fn<S: Spec, B: FunctionListBuilder>(
     ctx: &mut Context<S>,
     impl_builder: B,
     path_name: &str,

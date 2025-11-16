@@ -80,7 +80,7 @@ TODO: Support mapping `null`, even though this does not make much sense. For Rus
 
 ## Client code generation from OpenAPI operations
 
-The generator will produce a struct called `Client`, for which it produces an `impl` block. The block will contains methods for each operation (so each HTTP verb like `get`, `put` etc. will produce its own method). The method names derive from the path and the HTTP verb, so the endpoint for `GET /foo/bar` will become `pub fn foo_bar_get(&self)`.
+The generator will produce a trait called `Client`, containing methods for each operation (so each HTTP verb like `get`, `put` etc. will produce its own method). The method names derive from the path and the HTTP verb, so the endpoint for `GET /foo/bar` will become `pub fn foo_bar_get(&self)`.
 
 An OpenAPI operation consits of a number of key components that each influence the way a method is generated.
 

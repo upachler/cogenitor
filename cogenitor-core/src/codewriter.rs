@@ -184,7 +184,7 @@ fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStre
 
     match &impl_block.impl_trait {
         Some(trait_ref) => {
-            let trait_name = trait_ref.name();
+            let trait_name = syn::parse_str::<syn::Type>(trait_ref.name().as_ref())?;
             Ok(quote! {
                 impl #trait_name for #type_name {
                     #(#function_tokens)*

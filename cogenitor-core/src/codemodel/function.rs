@@ -71,4 +71,8 @@ impl FunctionBuilder {
             .map(|p| p.name.as_ref())
             .collect::<Vec<&str>>()
     }
+
+    pub fn body(&mut self, body_token_stream: TokenStream) {
+        self.body = Some(body_token_stream)
+    }
 }
