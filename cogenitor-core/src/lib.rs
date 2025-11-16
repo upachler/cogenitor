@@ -225,14 +225,9 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
     for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
             log::debug!("creating method for {method} {path}");
-            client_trait = parse_path_into_trait_fn(
-                ctx,
-                client_trait,
-                &path,
-                &path_item,
-                method.clone(),
-                &path_op,
-            )?;
+            let function =
+                parse_path_into_trait_fn(ctx, &path, &path_item, method.clone(), &path_op)?;
+            client_trait = client_trait.function(function);
         }
     }
 
@@ -626,14 +621,13 @@ fn make_impl_fn<S: Spec>(
     Ok(client_impl.function(function.build()))
 }
 
-fn parse_path_into_trait_fn<S: Spec, B: FunctionListBuilder>(
+fn parse_path_into_trait_fn<S: Spec>(
     ctx: &mut Context<S>,
-    impl_builder: B,
     path_name: &str,
     path_item: &S::PathItem,
     method: http::Method,
     path_op: &S::Operation,
-) -> anyhow::Result<B> {
+) -> anyhow::Result<Function> {
     let candidate_name = translate::path_method_to_rust_fn_name(&method, path_name)?;
 
     let fn_name = candidate_name; // FIXME: handle collisions
@@ -688,7 +682,7 @@ fn parse_path_into_trait_fn<S: Spec, B: FunctionListBuilder>(
         function = function.param(body_param_name, type_ref);
     }
 
-    Ok(impl_builder.function(function.build()))
+    Ok(function.build())
 }
 
 fn parse_into_fn_result<S: Spec>(
