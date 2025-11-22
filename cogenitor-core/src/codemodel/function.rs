@@ -20,6 +20,10 @@ impl Function {
     pub fn return_type(&self) -> &TypeRef {
         &self.return_type
     }
+
+    pub fn body(&self) -> Option<&TokenStream> {
+        self.body.as_ref()
+    }
 }
 
 impl NamedItem for Function {

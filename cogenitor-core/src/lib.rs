@@ -22,6 +22,7 @@ use crate::{
         implementation::ImplementationBuilder,
         trait_::TraitBuilder,
     },
+    translate::ContainsPredicate,
     types::{
         MediaType, Operation, Parameter, ParameterLocation, PathItem, RefOr, RequestBody, Response,
         StatusSpec,
@@ -38,6 +39,11 @@ mod types;
 mod test;
 
 pub mod adapters;
+
+/// name of the enum variant representing an unknown (unspecified) response from the server
+const UNKNOWNRESPONSE_ERROR_VARIANT: &str = "UnknownResponse";
+/// name of the enum variant representing an error that is not representable by a HTTP status (network errors, etc.)
+const OTHERERROR_ERROR_VARIANT: &str = "OtherError";
 
 /// Configuration settings for OpenAPI code generation.
 #[derive(Default, Debug, PartialEq)]
@@ -221,13 +227,16 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
 
     log::trace!("types from schemas section constructed: {:?}", ctx.mapping);
 
+    let mut operations = Vec::new();
     let mut client_trait = TraitBuilder::new("Client");
     for (path, path_item) in spec.paths() {
         for (method, path_op) in path_item.operations_iter() {
             log::debug!("creating method for {method} {path}");
-            let function =
+            let operation =
                 parse_path_into_trait_fn(ctx, &path, &path_item, method.clone(), &path_op)?;
+            let function = make_operation_method(ctx, &operation).build();
             client_trait = client_trait.function(function);
+            operations.push((path.clone(), method, operation));
         }
     }
 
@@ -240,10 +249,8 @@ fn populate_types<S: Spec>(ctx: &mut Context<S>, spec: &S) -> anyhow::Result<()>
 
     let mut client_impl = ImplementationBuilder::new_trait(client_trait, client_struct);
 
-    // TODO: fill 'operations'
-    let operations = vec![];
     for (path, method, fn_context) in operations {
-        client_impl = make_impl_fn(ctx, client_impl, path, method, fn_context)?;
+        client_impl = make_impl_fn(ctx, client_impl, path.as_str(), method, &fn_context)?;
     }
 
     ctx.m.insert_implementation(client_impl.build())?;
@@ -369,6 +376,7 @@ fn parse_schema<S: Spec>(
 }
 
 enum MediaTypeMapping {
+    NoMediaType,
     SingleMediaType {
         media_type: String,
         content_type_ref: TypeRef,
@@ -379,10 +387,47 @@ enum MediaTypeMapping {
     },
 }
 
+impl MediaTypeMapping {
+    fn type_ref(&self) -> Option<&TypeRef> {
+        match self {
+            MediaTypeMapping::NoMediaType => None,
+            MediaTypeMapping::SingleMediaType {
+                content_type_ref, ..
+            } => Some(content_type_ref),
+            MediaTypeMapping::MultipleMediaTypes {
+                content_enum_type_ref,
+                ..
+            } => Some(content_enum_type_ref),
+        }
+    }
+}
+
 enum ResponseBodyMapping {
     NoBody,
-    SingleResponse(StatusSpec, MediaTypeMapping),
-    MultipleResponses(Vec<(StatusSpec, MediaTypeMapping)>),
+    SingleResponse {
+        status_spec: StatusSpec,
+        media_type_mapping: MediaTypeMapping,
+    },
+    MultipleResponses {
+        enum_type_ref: TypeRef,
+        media_type_mappings: Vec<(StatusSpec, MediaTypeMapping)>,
+    },
+}
+
+impl ResponseBodyMapping {
+    fn type_ref(&self) -> Option<&TypeRef> {
+        match self {
+            ResponseBodyMapping::NoBody => None,
+            ResponseBodyMapping::SingleResponse {
+                media_type_mapping, ..
+            } => media_type_mapping.type_ref(),
+            ResponseBodyMapping::MultipleResponses { enum_type_ref, .. } => Some(enum_type_ref),
+        }
+    }
+
+    fn type_ref_or_unit(&self, cm: &mut Codemodel) -> TypeRef {
+        self.type_ref().map(Clone::clone).unwrap_or(cm.type_unit())
+    }
 }
 
 struct OperationParameterMapping {
@@ -392,13 +437,17 @@ struct OperationParameterMapping {
     loc: crate::types::ParameterLocation,
 }
 
+struct OperationResultMapping {
+    return_type: TypeRef,
+    success_return_mapping: ResponseBodyMapping,
+    error_return_mapping: ResponseBodyMapping,
+}
+
 struct OperationMethodContext {
     method_name: String,
     parameters: Vec<OperationParameterMapping>,
     body_param: Option<(String, MediaTypeMapping)>,
-    return_type: TypeRef,
-    success_return_mapping: ResponseBodyMapping,
-    error_return_mapping: ResponseBodyMapping,
+    result_mapping: OperationResultMapping,
 }
 
 fn make_operation_method<S: Spec>(
@@ -406,8 +455,11 @@ fn make_operation_method<S: Spec>(
     omc: &OperationMethodContext,
 ) -> FunctionBuilder {
     // create function builder with self parameter to make it a method
-    let mut function = FunctionBuilder::new(omc.method_name.clone(), omc.return_type.clone())
-        .param("self".to_string(), ctx.cm.type_ref_self());
+    let mut function = FunctionBuilder::new(
+        omc.method_name.clone(),
+        omc.result_mapping.return_type.clone(),
+    )
+    .param("self".to_string(), ctx.cm.type_ref_self());
 
     // add method parameters for path, query header and cookie OAS params
     for opm in &omc.parameters {
@@ -417,16 +469,17 @@ fn make_operation_method<S: Spec>(
     // add parameter for request body, if present
     if let Some((body_param_name, media_type_mapping)) = &omc.body_param {
         let param_type_ref = match media_type_mapping {
+            MediaTypeMapping::NoMediaType => ctx.cm.type_unit(),
             MediaTypeMapping::SingleMediaType {
                 media_type: _,
                 content_type_ref,
-            } => content_type_ref,
+            } => content_type_ref.clone(),
             MediaTypeMapping::MultipleMediaTypes {
                 content_enum_type_ref,
                 media_type_to_variant: _,
-            } => content_enum_type_ref,
+            } => content_enum_type_ref.clone(),
         };
-        function = function.param(body_param_name.clone(), param_type_ref.clone());
+        function = function.param(body_param_name.clone(), param_type_ref);
     }
 
     // the result is the preconfigured function builder (yet without a body)
@@ -621,20 +674,25 @@ fn make_impl_fn<S: Spec>(
     Ok(client_impl.function(function.build()))
 }
 
+impl ContainsPredicate for Vec<OperationParameterMapping> {
+    fn contains_str(&self, s: &str) -> bool {
+        self.iter().find(|item| item.rust_name.eq(s)).is_some()
+    }
+}
+
 fn parse_path_into_trait_fn<S: Spec>(
     ctx: &mut Context<S>,
     path_name: &str,
     path_item: &S::PathItem,
     method: http::Method,
     path_op: &S::Operation,
-) -> anyhow::Result<Function> {
+) -> anyhow::Result<OperationMethodContext> {
     let candidate_name = translate::path_method_to_rust_fn_name(&method, path_name)?;
 
-    let fn_name = candidate_name; // FIXME: handle collisions
+    let method_name = candidate_name; // FIXME: handle collisions
 
-    let return_type = parse_into_fn_result(ctx, path_name, path_item, method.clone(), path_op)?;
-    let mut function = FunctionBuilder::new(fn_name, return_type)
-        .param("self".to_string(), ctx.cm.type_ref_self());
+    let result_mapping =
+        parse_into_fn_result_mapping(ctx, path_name, path_item, method.clone(), path_op)?;
 
     // Parameters in path_op can override those in path_item, so
     // we apply the non-shadowed of path_item first
@@ -654,60 +712,89 @@ fn parse_path_into_trait_fn<S: Spec>(
         param.name().to_owned()
     }
 
+    let mut parameters = Vec::<OperationParameterMapping>::new();
+
     for param in outer_params {
-        function = append_param(ctx, function, &param, param_type_name_fn::<S>)?;
+        let mapping = append_param(ctx, &parameters, &param, param_type_name_fn::<S>)?;
+        parameters.push(mapping);
     }
 
     for param in path_op.parameters() {
-        function = append_param(
+        let mapping = append_param(
             ctx,
-            function,
+            &parameters,
             &param.resolve_fully(),
             param_type_name_fn::<S>,
         )?;
+        parameters.push(mapping);
     }
 
     // add request body as function parameter if defined
-    if let Some(request_body) = path_op.request_body() {
-        // closure to build name from {operationFragment}Content pattern
-        // - called if needed.
-        let op_fragment_content_fn =
-            || translate::path_method_to_rust_type_name(method.clone(), path_name) + "Content";
-        let type_ref = map_content(
-            ctx,
-            &request_body.resolve_fully().content(),
-            op_fragment_content_fn,
-        )?;
-        let body_param_name = derive_function_param_name("body", &function);
-        function = function.param(body_param_name, type_ref);
-    }
+    let body_param: Option<(String, MediaTypeMapping)> = match path_op.request_body() {
+        Some(request_body) => {
+            // closure to build name from {operationFragment}Content pattern
+            // - called if needed.
+            let op_fragment_content_fn =
+                || translate::path_method_to_rust_type_name(method.clone(), path_name) + "Content";
+            let media_type_mapping = map_content(
+                ctx,
+                &request_body.resolve_fully().content(),
+                op_fragment_content_fn,
+            )?;
 
-    Ok(function.build())
+            match media_type_mapping {
+                MediaTypeMapping::NoMediaType => None,
+                MediaTypeMapping::SingleMediaType { .. }
+                | MediaTypeMapping::MultipleMediaTypes { .. } => {
+                    let body_param_name = derive_function_param_name("body", &parameters);
+                    Some((body_param_name, media_type_mapping))
+                }
+            }
+        }
+        None => None,
+    };
+
+    Ok(OperationMethodContext {
+        method_name,
+        parameters,
+        body_param,
+        result_mapping,
+    })
 }
 
-fn parse_into_fn_result<S: Spec>(
+fn parse_into_fn_result_mapping<S: Spec>(
     ctx: &mut Context<S>,
     path_name: &str,
     path_item: &S::PathItem,
     method: http::Method,
     path_op: &S::Operation,
-) -> anyhow::Result<TypeRef> {
-    let success_type = build_response_type(ctx, path_name, method.clone(), path_op, true)?;
-    let error_type = build_response_type(ctx, path_name, method, path_op, false)?;
+) -> anyhow::Result<OperationResultMapping> {
+    let success_return_mapping =
+        build_response_body_mapping(ctx, path_name, method.clone(), path_op, true)?;
+    let error_return_mapping = build_response_body_mapping(ctx, path_name, method, path_op, false)?;
 
-    Ok(TypeRef::GenericInstance {
+    let return_type = TypeRef::GenericInstance {
         generic_type: Box::new(ctx.cm.type_result()),
-        type_parameter: vec![success_type, error_type], // FIXME: need to assign proper result type params
+        type_parameter: vec![
+            success_return_mapping.type_ref_or_unit(&mut ctx.cm),
+            error_return_mapping.type_ref_or_unit(&mut ctx.cm),
+        ], // FIXME: need to assign proper result type params
+    };
+
+    Ok(OperationResultMapping {
+        return_type,
+        success_return_mapping,
+        error_return_mapping,
     })
 }
 
-fn build_response_type<S: Spec>(
+fn build_response_body_mapping<S: Spec>(
     ctx: &mut Context<S>,
     path_name: &str,
     method: http::Method,
     path_op: &S::Operation,
     build_for_success: bool,
-) -> anyhow::Result<TypeRef> {
+) -> anyhow::Result<ResponseBodyMapping> {
     fn is_success(status_spec: StatusSpec) -> bool {
         match status_spec {
             types::StatusSpec::Informational(_)
@@ -734,46 +821,61 @@ fn build_response_type<S: Spec>(
         "Error"
     };
 
-    let type_ref = match (build_for_success, responses.len()) {
-        (true, 0) => ctx.cm.type_unit(),
+    let response_body_mapping = match (build_for_success, responses.len()) {
+        (true, 0) => ResponseBodyMapping::NoBody,
         (true, 1) => {
             let single_response = responses.get(0).unwrap();
             let status_spec = single_response.0.clone();
             let content = single_response.1.resolve().resolve_fully().content();
-            map_content(ctx, &content, || {
+            let media_type_mapping = map_content(ctx, &content, || {
                 content_enum_name(&method, path_name, &status_spec)
-            })?
+            })?;
+            ResponseBodyMapping::SingleResponse {
+                status_spec,
+                media_type_mapping,
+            }
         }
         _ => {
             let enum_name = translate::path_method_to_rust_type_name(method.clone(), path_name)
                 + resonses_name_suffix;
             let mut e = EnumBuilder::new(&enum_name);
 
+            let mut media_type_mappings = Vec::new();
+
             for (status_spec, response) in responses {
                 let status_spec = &status_spec;
                 let content = response.resolve_fully().content();
                 let variant_name = translate::status_spec_to_rust_type_name(status_spec.clone());
-                let variant_type = map_content(ctx, &content, || {
+                let media_type_mapping = map_content(ctx, &content, || {
                     content_enum_name(&method, path_name, &status_spec)
                 })?;
+                let variant_type = media_type_mapping
+                    .type_ref()
+                    .map(Clone::clone)
+                    .unwrap_or(ctx.cm.type_unit());
                 e = e.tuple_variant(&variant_name, vec![variant_type])?;
+                media_type_mappings.push((status_spec.clone(), media_type_mapping));
             }
 
             if !build_for_success {
                 e = e.tuple_variant_with_input(
-                    "UnknownResponse",
+                    UNKNOWNRESPONSE_ERROR_VARIANT,
                     vec![quote!(::http::Response<::std::vec::Vec<u8>>)],
                 )?;
                 e = e.tuple_variant_with_input(
-                    "OtherError",
+                    OTHERERROR_ERROR_VARIANT,
                     vec![quote!(::std::boxed::Box<dyn ::std::error::Error>)],
                 )?
             }
 
-            ctx.m.insert_enum(e.build()?)?
+            let enum_type_ref = ctx.m.insert_enum(e.build()?)?;
+            ResponseBodyMapping::MultipleResponses {
+                enum_type_ref,
+                media_type_mappings,
+            }
         }
     };
-    Ok(type_ref)
+    Ok(response_body_mapping)
 }
 
 fn content_enum_name(method: &http::Method, path_name: &str, status_spec: &StatusSpec) -> String {
@@ -785,45 +887,55 @@ fn map_content<S: Spec>(
     ctx: &mut Context<S>,
     content: &HashMap<String, S::MediaType>,
     content_name_fn: impl Fn() -> String,
-) -> anyhow::Result<TypeRef> {
-    let mapped_type;
-    match content.len() {
-        0 => mapped_type = ctx.cm.type_unit(),
+) -> anyhow::Result<MediaTypeMapping> {
+    let media_type_mapping = match content.len() {
+        0 => MediaTypeMapping::NoMediaType,
         1 => {
             let (media_type_key, media_type) = content.iter().next().unwrap();
-            mapped_type = map_media_type::<S>(ctx, media_type_key, media_type, content_name_fn);
+            let content_type_ref = map_media_type::<S>(ctx, media_type, content_name_fn);
+            MediaTypeMapping::SingleMediaType {
+                media_type: media_type_key.clone(),
+                content_type_ref,
+            }
         }
         _ => {
-            mapped_type = map_enum_from_content::<S>(ctx, content, content_name_fn)?;
+            let (content_enum_type_ref, media_type_to_variant) =
+                map_enum_from_content::<S>(ctx, content, content_name_fn)?;
+            MediaTypeMapping::MultipleMediaTypes {
+                content_enum_type_ref,
+                media_type_to_variant,
+            }
         }
     };
-    Ok(mapped_type)
+
+    Ok(media_type_mapping)
 }
 
 fn map_enum_from_content<S: Spec>(
     ctx: &mut Context<S>,
     content: &HashMap<String, S::MediaType>,
     content_name_fn: impl Fn() -> String,
-) -> anyhow::Result<TypeRef> {
+) -> anyhow::Result<(TypeRef, Vec<(String, String)>)> {
     // TODO: disambiguate!
     let enum_name = content_name_fn();
     let mut e = EnumBuilder::new(&enum_name);
 
+    let mut media_type_to_variant = Vec::new();
+
     for (media_type_key, media_type) in content.iter() {
         let variant_name = translate::media_type_range_to_rust_type_name(media_type_key);
         let content_variant_name_fn = || enum_name.clone() + variant_name.as_str();
-        let variant_type =
-            map_media_type::<S>(ctx, media_type_key, media_type, content_variant_name_fn);
+        let variant_type = map_media_type::<S>(ctx, media_type, content_variant_name_fn);
+        media_type_to_variant.push((media_type_key.clone(), variant_name.clone()));
         e = e.tuple_variant(&variant_name, vec![variant_type])?;
     }
 
     let e = e.build()?;
-    Ok(ctx.m.insert_enum(e)?)
+    Ok((ctx.m.insert_enum(e)?, media_type_to_variant))
 }
 
 fn map_media_type<S: Spec>(
     ctx: &mut Context<S>,
-    media_type_key: &str,
     media_type: &S::MediaType,
     schema_name_fn: impl Fn() -> String,
 ) -> TypeRef {
@@ -840,11 +952,12 @@ fn map_media_type<S: Spec>(
     }
 }
 
-fn derive_function_param_name(name_candidate: &str, function: &FunctionBuilder) -> String {
-    let existing_names = function.param_names();
-
+fn derive_function_param_name(
+    name_candidate: &str,
+    name_collision_predicate: &impl ContainsPredicate,
+) -> String {
     let mapped_name = translate::parameter_to_rust_fn_param(name_candidate);
-    translate::uncollide(&existing_names, mapped_name)
+    translate::uncollide(name_collision_predicate, mapped_name)
 }
 
 /// Append a an OAS operation parameter as rust function parameter
@@ -853,11 +966,11 @@ fn derive_function_param_name(name_candidate: &str, function: &FunctionBuilder) 
 /// to different names than those in the spec.
 fn append_param<S: Spec>(
     ctx: &mut Context<S>,
-    function: FunctionBuilder,
+    name_collision_predicate: &impl ContainsPredicate,
     param: &S::Parameter,
     param_type_name_fn: impl Fn(&S::Parameter) -> String,
-) -> anyhow::Result<FunctionBuilder> {
-    let mapped_name = derive_function_param_name(param.name(), &function);
+) -> anyhow::Result<OperationParameterMapping> {
+    let mapped_name = derive_function_param_name(param.name(), name_collision_predicate);
 
     // TODO: params are incredibly complex in OAS. Currently we ignore most
     // of this complexity, however, it may severely impact the way parameters
@@ -868,7 +981,17 @@ fn append_param<S: Spec>(
     if let Some(schema) = param.schema() {
         mapped_type = type_ref_of(ctx, &schema, &candidate_param_type_name)?;
     } else if let Some(content) = param.content() {
-        mapped_type = map_content(ctx, &content, || candidate_param_type_name.clone())?;
+        let media_type_mapping = map_content(ctx, &content, || candidate_param_type_name.clone())?;
+        mapped_type = match media_type_mapping {
+            MediaTypeMapping::NoMediaType => ctx.cm.type_unit(),
+            MediaTypeMapping::SingleMediaType {
+                content_type_ref, ..
+            } => content_type_ref,
+            MediaTypeMapping::MultipleMediaTypes {
+                content_enum_type_ref,
+                ..
+            } => content_enum_type_ref,
+        }
     } else {
         return Err(anyhow!(
             "invariant violated in OAS spec: parameter {} has neither 'schema' nor 'content' defined!",
@@ -876,8 +999,13 @@ fn append_param<S: Spec>(
         ));
     }
 
-    // finally add parameter
-    Ok(function.param(mapped_name, mapped_type))
+    // finally return parameter mapping
+    Ok(OperationParameterMapping {
+        oas_name: param.name().to_string(),
+        rust_name: mapped_name,
+        type_ref: mapped_type,
+        loc: param.in_(),
+    })
 }
 
 fn type_ref_of<S: Spec>(

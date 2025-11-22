@@ -146,7 +146,7 @@ fn write_trait_decl(t: &TraitRef) -> anyhow::Result<TokenStream> {
     let mut function_tokens = Vec::new();
 
     for func in t.function_iter() {
-        function_tokens.push(write_trait_function(func)?);
+        function_tokens.push(write_function(func, false, None)?);
     }
 
     let attrs = tokenize_attrs(t.attr_iter());
@@ -178,8 +178,9 @@ fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStre
     let type_name = syn_type_name_of(&impl_block.implementing_type)?;
     let mut function_tokens = Vec::new();
 
+    let is_pub = !impl_block.impl_trait.is_some();
     for func in &impl_block.associated_functions {
-        function_tokens.push(write_function(func)?);
+        function_tokens.push(write_function(func, is_pub, func.body().map(Clone::clone))?);
     }
 
     match &impl_block.impl_trait {
@@ -199,15 +200,7 @@ fn write_implementation(impl_block: &Implementation) -> anyhow::Result<TokenStre
     }
 }
 
-fn write_function(func: &Function) -> anyhow::Result<TokenStream> {
-    write_function_impl(func, true, Some(quote!(todo!())))
-}
-
-fn write_trait_function(func: &Function) -> anyhow::Result<TokenStream> {
-    write_function_impl(func, false, None)
-}
-
-fn write_function_impl(
+fn write_function(
     func: &Function,
     is_pub: bool,
     body: Option<TokenStream>,
